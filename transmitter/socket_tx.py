@@ -22,6 +22,7 @@ import argparse
 import glob
 import os
 import sys
+import threading
 import time
 
 import cv2
@@ -158,7 +159,169 @@ def run_folder(codec, socket, args):
                             label=os.path.basename(p))
 
 
-def run_camera(codec, socket, args):
+# ── interactive camera GUI ───────────────────────────────────────────────────
+BTN_COLOR_IDLE   = (34, 139, 34)
+BTN_COLOR_HOVER  = (0, 200, 0)
+BTN_COLOR_ACTIVE = (0, 80, 200)
+BTN_COLOR_DONE   = (0, 180, 180)
+OVERLAY_ALPHA    = 0.55
+FONT             = cv2.FONT_HERSHEY_SIMPLEX
+
+
+def _btn_rect(w, h):
+    bw, bh = 260, 54
+    x1 = (w - bw) // 2
+    return x1, h - bh - 20, x1 + bw, h - 20
+
+
+def _point_in_rect(px, py, rect):
+    x1, y1, x2, y2 = rect
+    return x1 <= px <= x2 and y1 <= py <= y2
+
+
+def _draw_button(canvas, w, h, color, text):
+    x1, y1, x2, y2 = _btn_rect(w, h)
+    overlay = canvas.copy()
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
+    cv2.addWeighted(overlay, OVERLAY_ALPHA, canvas, 1 - OVERLAY_ALPHA, 0, canvas)
+    cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
+    tw, th = cv2.getTextSize(text, FONT, 0.72, 2)[0]
+    cv2.putText(canvas, text, (x1 + (x2 - x1 - tw) // 2, y1 + (y2 - y1 + th) // 2),
+                FONT, 0.72, (255, 255, 255), 2, cv2.LINE_AA)
+
+
+def _draw_hud(canvas, shot_count, status):
+    cv2.putText(canvas, f"Shots sent: {shot_count}", (12, 34),
+                FONT, 0.72, (255, 255, 255), 2, cv2.LINE_AA)
+    if status:
+        cv2.putText(canvas, status, (12, 68), FONT, 0.6, (0, 220, 220), 2, cv2.LINE_AA)
+
+
+class _SendState:
+    IDLE, SENDING, DONE = "idle", "sending", "done"
+
+    def __init__(self):
+        self.state = self.IDLE
+        self.shot_count = 0
+        self._lock = threading.Lock()
+
+    def start_send(self):
+        with self._lock:
+            self.state = self.SENDING
+
+    def finish_send(self):
+        with self._lock:
+            self.state = self.DONE
+            self.shot_count += 1
+
+    def ack_done(self):
+        with self._lock:
+            if self.state == self.DONE:
+                self.state = self.IDLE
+
+    @property
+    def is_sending(self):
+        with self._lock:
+            return self.state == self.SENDING
+
+    def snapshot(self):
+        with self._lock:
+            return self.state, self.shot_count
+
+
+def _mouse_cb(event, x, y, flags, param):
+    state, w, h, trigger, mouse_pos = param
+    mouse_pos[0], mouse_pos[1] = x, y
+    if event == cv2.EVENT_LBUTTONDOWN \
+            and _point_in_rect(x, y, _btn_rect(w, h)) and not state.is_sending:
+        trigger[0] = True
+
+
+def camera_interactive(codec, socket, args):
+    cam = int(args.path) if args.path.isdigit() else 0
+    cap = cv2.VideoCapture(cam)
+    if not cap.isOpened():
+        print(f"[!] cannot open camera {cam}")
+        return
+    time.sleep(0.8)
+    for _ in range(5):
+        cap.read()
+
+    win = "DJSCC-playground TX"
+    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(win, args.width, args.height)
+
+    state = _SendState()
+    trigger = [False]
+    mouse_pos = [-1, -1]
+    captured = [None]
+    done_flash_end = [0.0]
+    cv2.setMouseCallback(win, _mouse_cb,
+                         param=(state, args.width, args.height, trigger, mouse_pos))
+
+    send_warmup(codec, socket, args)
+    print("\n[*] camera live. Click CAPTURE & SEND or press Space ('q'/Esc quits).\n")
+
+    def _send_worker(frame_bgr):
+        state.start_send()
+        try:
+            encode_and_send(codec, socket, args,
+                            prepare_frame(frame_bgr, args.width, args.height),
+                            label=f"shot #{state.shot_count + 1}")
+        finally:
+            state.finish_send()
+            done_flash_end[0] = time.time() + 1.2
+
+    try:
+        while True:
+            ok, raw = cap.read()
+            if not ok:
+                print("[!] camera read failed.")
+                break
+            display = cv2.resize(raw, (args.width, args.height))
+            now = time.time()
+            cur, shots = state.snapshot()
+
+            if cur == _SendState.SENDING:
+                if captured[0] is not None:
+                    display = cv2.resize(captured[0], (args.width, args.height))
+                color, text = BTN_COLOR_ACTIVE, "  Encoding + Sending..."
+                status = "Transmitting over SDR..."
+            elif cur == _SendState.DONE or now < done_flash_end[0]:
+                color, text = BTN_COLOR_DONE, "  Sent!"
+                status = f"Shot #{shots} transmitted"
+                state.ack_done()
+            else:
+                hover = _point_in_rect(mouse_pos[0], mouse_pos[1],
+                                       _btn_rect(args.width, args.height))
+                color = BTN_COLOR_HOVER if hover else BTN_COLOR_IDLE
+                text = "[ CAPTURE & SEND ]"
+                status = "Space or click to capture" if shots == 0 \
+                    else f"Last: shot #{shots}"
+
+            _draw_hud(display, shots, status)
+            _draw_button(display, args.width, args.height, color, text)
+            cv2.imshow(win, display)
+
+            if trigger[0] and not state.is_sending:
+                trigger[0] = False
+                captured[0] = raw.copy()
+                threading.Thread(target=_send_worker, args=(raw.copy(),),
+                                 daemon=True).start()
+                print(f"[*] shot #{shots + 1} captured & queued")
+
+            key = cv2.waitKey(30) & 0xFF
+            if key == ord(' ') and not state.is_sending:
+                trigger[0] = True
+            elif key in (ord('q'), 27):
+                break
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+        print(f"\n[*] session ended. total shots: {state.shot_count}")
+
+
+def camera_auto(codec, socket, args):
     cam = int(args.path) if args.path.isdigit() else 0
     cap = cv2.VideoCapture(cam)
     if not cap.isOpened():
@@ -168,20 +331,27 @@ def run_camera(codec, socket, args):
     for _ in range(5):
         cap.read()
     send_warmup(codec, socket, args)
-    shots = args.shots if args.shots > 0 else 1
     try:
-        for i in range(shots):
+        for i in range(args.shots):
             if i:
                 time.sleep(args.interval)
             ok, frame = cap.read()
             if not ok:
                 continue
-            print(f"\n[*] shot {i+1}/{shots}")
+            print(f"\n[*] shot {i+1}/{args.shots}")
             encode_and_send(codec, socket, args,
                             prepare_frame(frame, args.width, args.height),
-                            label=f"shot {i+1}/{shots}")
+                            label=f"shot {i+1}/{args.shots}")
     finally:
         cap.release()
+
+
+def run_camera(codec, socket, args):
+    """--shots 0 (default) -> interactive button GUI; --shots N -> auto-capture."""
+    if args.shots == 0:
+        camera_interactive(codec, socket, args)
+    else:
+        camera_auto(codec, socket, args)
 
 
 def parse_args():
@@ -200,7 +370,9 @@ def parse_args():
 
     p.add_argument("--source", default="camera", choices=["camera", "file", "folder"])
     p.add_argument("--path", default="0")
-    p.add_argument("--shots", type=int, default=0)
+    p.add_argument("--shots", type=int, default=0,
+                   help="camera source: 0 = interactive CAPTURE & SEND button "
+                        "(default), N>0 = auto-capture N shots --interval apart.")
     p.add_argument("--interval", type=float, default=3.0)
     p.add_argument("--repeat", type=int, default=1)
     p.add_argument("--repeat-interval", type=float, default=0.5)
