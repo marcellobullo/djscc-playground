@@ -29,7 +29,7 @@ from jscc.djscc.codec_djscc import _comp_ratio_to_M, _load_split_state  # noqa: 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--ckpt", required=True, help="raw .pth checkpoint")
-    ap.add_argument("--out", required=True, help="output HF model folder")
+    ap.add_argument("--out", default=None, help="output HF model folder")
     ap.add_argument("--comp-ratio", type=float, default=6)
     ap.add_argument("--N", type=int, default=256)
     ap.add_argument("--height", type=int, default=512)
@@ -45,9 +45,10 @@ def main() -> int:
     model = DJSCCModel(cfg)
     _load_split_state(model, args.ckpt)
 
-    os.makedirs(args.out, exist_ok=True)
-    model.save_pretrained(args.out)
-    print(f"[*] saved HF model -> {os.path.abspath(args.out)}")
+    if args.out:
+        os.makedirs(args.out, exist_ok=True)
+        model.save_pretrained(args.out)
+        print(f"[*] saved HF model -> {os.path.abspath(args.out)}")
 
     if args.push_to_hub:
         model.push_to_hub(args.push_to_hub)
