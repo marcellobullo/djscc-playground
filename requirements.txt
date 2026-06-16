@@ -1,0 +1,16 @@
+# Core
+torch
+numpy
+opencv-python
+pyzmq
+
+# Model loading / packaging
+transformers>=4.32
+huggingface_hub
+
+# Communications toolkit (Kaira-native models import this at load time)
+# Install from https://github.com/ipc-lab/kaira if not on PyPI for your version.
+kaira
+
+# Note: the GNU Radio flowgraphs (transmitter/receiver/gnu_radio/*.grc) also need
+# GNU Radio 3.10+, UHD, and the gr-deepjscc OOT module from the djscc-demo repo.
