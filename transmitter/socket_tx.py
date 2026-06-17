@@ -362,6 +362,9 @@ def parse_args():
     p.add_argument("--comp-ratio", type=float, default=6,
                    help="inverse compression ratio for raw .pth (default: 6)")
     p.add_argument("--N", type=int, default=256)
+    p.add_argument("--snr-db", type=float, default=19.0,
+                   help="Design SNR (dB) for SNR-adaptive encoders (e.g. AD-JSCC). "
+                        "Ignored by channel-blind encoders.")
     p.add_argument("--device", default="auto",
                    choices=["auto", "cpu", "mps", "cuda"])
     p.add_argument("--packet-len", type=int, default=960)
@@ -396,7 +399,7 @@ def main() -> int:
 
     codec = load_codec(
         args.model, role="encoder", device=args.device, packet_len=args.packet_len,
-        comp_ratio=args.comp_ratio, N=args.N,
+        comp_ratio=args.comp_ratio, N=args.N, snr_db=args.snr_db,
         img_height=args.height, img_width=args.width,
     )
     if codec.output_kind != OutputKind.COMPLEX_SYMBOLS:
@@ -406,7 +409,7 @@ def main() -> int:
 
     if args.aligner:
         aligner = load_aligner(args.aligner, codec.tcn, codec.h, codec.w,
-                               device=args.device)
+                               device=codec.device)
         codec.set_aligner(aligner)
         print(f"[*] aligner attached: kind={aligner.kind} mode={aligner.mode}")
 

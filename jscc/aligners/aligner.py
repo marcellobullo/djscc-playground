@@ -24,6 +24,7 @@ from typing import Optional
 import torch
 
 from ..base import BaseAligner
+from ..djscc.codec_djscc import _pick_device
 from . import modules as _m
 
 
@@ -92,17 +93,28 @@ def _from_folder(folder: str, tcn: int, h: int, w: int, device: str):
 
 
 def load_aligner(spec: str, tcn: int, h: int, w: int,
-                 device: str = "cpu", n_samples: Optional[int] = None) -> Aligner:
+                 device="cpu", n_samples: Optional[int] = None) -> Aligner:
+    # Resolve "auto"/"cpu"/"mps"/"cuda" strings to a real device (torch.load's
+    # map_location and .to() reject "auto"); a torch.device passes through.
+    dev = _pick_device(device) if isinstance(device, str) else device
+
     # local .pth file -> legacy filename-inferred factory
     if os.path.isfile(spec) and spec.endswith(".pth"):
-        module = _m.load_aligner(spec, tcn, h, w, device=device, n_samples=n_samples)
+        module = _m.load_aligner(spec, tcn, h, w, device=dev, n_samples=n_samples)
         return Aligner(module, module.kind)
 
-    # local folder
+    # local folder (single aligner, or a subfolder of a multi-aligner repo)
     if os.path.isdir(spec):
-        return _from_folder(spec, tcn, h, w, device)
+        return _from_folder(spec, tcn, h, w, dev)
 
-    # otherwise: HuggingFace repo id
+    # otherwise: a HuggingFace repo id, optionally with a subfolder selecting one
+    # aligner from a multi-file repo, e.g.
+    #   "marcellobullo/djscc-semantic-aligners/conv-attn2convnext".
     from huggingface_hub import snapshot_download
-    folder = snapshot_download(spec)
-    return _from_folder(folder, tcn, h, w, device)
+    parts = spec.split("/")
+    repo_id = "/".join(parts[:2])
+    subfolder = "/".join(parts[2:])
+    allow = f"{subfolder}/*" if subfolder else None
+    folder = snapshot_download(repo_id, allow_patterns=allow)
+    target = os.path.join(folder, subfolder) if subfolder else folder
+    return _from_folder(target, tcn, h, w, dev)

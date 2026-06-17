@@ -330,7 +330,7 @@ def main() -> int:
         return 2
     if args.aligner:
         aligner = load_aligner(args.aligner, codec.tcn, codec.h, codec.w,
-                               device=args.device)
+                               device=codec.device)
         codec.set_aligner(aligner)
         print(f"[*] aligner attached: kind={aligner.kind} mode={aligner.mode}")
 

@@ -26,6 +26,10 @@ from .registry import resolve_alias
 
 # Default model family used for bare ``.pth`` checkpoints.
 _LEGACY_MODULE = "jscc.djscc.codec_djscc"
+# Spatial-CSI ("no-band") variant, selected when the filename signals it.
+_SPATIALCSI_MODULE = "jscc.djscc_spatialcsi.codec_djscc_spatialcsi"
+# AD-JSCC (attention) variant, selected when the filename signals it.
+_ADJSCC_MODULE = "jscc.adjscc.codec_adjscc"
 
 
 def load_codec(model: str, role: str, *, device: str = "auto",
@@ -36,7 +40,14 @@ def load_codec(model: str, role: str, *, device: str = "auto",
 
     # 1) legacy raw checkpoint -------------------------------------------------
     if model.endswith(".pth"):
-        mod = importlib.import_module(_LEGACY_MODULE)
+        name = os.path.basename(model).lower()
+        if any(t in name for t in ("no_band", "noband", "spatialcsi")):
+            legacy = _SPATIALCSI_MODULE
+        elif any(t in name for t in ("adjscc", "ad_jscc")):
+            legacy = _ADJSCC_MODULE
+        else:
+            legacy = _LEGACY_MODULE
+        mod = importlib.import_module(legacy)
         codec = mod.build(role, ckpt=model, device=device,
                           packet_len=packet_len, **overrides)
 
