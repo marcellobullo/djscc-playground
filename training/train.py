@@ -74,6 +74,40 @@ def make_channel(name: str, snr_db: float, coherence_time: int = 1,
     raise ValueError(f"unknown --channel {name!r} (awgn|rayleigh|rician|none)")
 
 
+def build_loss(name: str, device, mse_weight: float = 1.0, lpips_weight: float = 1.0):
+    """Training loss from kaira.losses.image (all return a minimizable scalar)."""
+    import kaira.losses.image as L
+    name = name.lower()
+    table = {
+        "mse": lambda: L.MSELoss(),
+        "l1": lambda: L.L1Loss(),
+        "msssim": lambda: L.MSSSIMLoss(),
+        "ssim": lambda: L.SSIMLoss(),
+        "lpips": lambda: L.LPIPSLoss(),
+        "vgg": lambda: L.VGGLoss(),
+        "mse_lpips": lambda: L.MSELPIPSLoss(mse_weight=mse_weight, lpips_weight=lpips_weight),
+    }
+    if name not in table:
+        raise ValueError(f"unknown --loss {name!r} ({'|'.join(table)})")
+    return table[name]().to(device)
+
+
+def build_val_metrics(device, lpips_net: str = "alex"):
+    """PSNR is computed inline; add MS-SSIM and LPIPS from kaira.metrics.image
+    (LPIPS downloads a small perceptual net on first use; skipped if unavailable)."""
+    import kaira.metrics.image as Mx
+    metrics = {}
+    try:
+        metrics["msssim"] = Mx.MultiScaleSSIM(data_range=1.0).to(device)
+    except Exception as e:
+        print(f"[!] MS-SSIM metric unavailable: {e}")
+    try:
+        metrics["lpips"] = Mx.LPIPS(net_type=lpips_net, normalize=True).to(device)
+    except Exception as e:
+        print(f"[!] LPIPS metric unavailable: {e}")
+    return metrics
+
+
 def forward_train(model, model_type, images, snr, channel, drop_prob,
                   packet_len, sentinel_db):
     """Encoder -> constraint -> channel (+drop) -> decoder, per-family. Returns
@@ -122,17 +156,28 @@ def sample_snr(args) -> float:
 
 
 @torch.no_grad()
-def validate(model, model_type, loader, device, args, snr_val):
+def validate(model, model_type, loader, device, args, snr_val, metrics):
     model.eval()
     psnrs = []
+    acc = {k: 0.0 for k in metrics}
+    n = 0
     for images, _ in loader:
         images = images.to(device)
         ch = make_channel(args.channel, snr_val, args.coherence_time, args.k_factor)
         out = forward_train(model, model_type, images, snr_val, ch,
-                            0.0, args.packet_len, args.sentinel_db)
+                            0.0, args.packet_len, args.sentinel_db).clamp(0.0, 1.0)
         mse = F.mse_loss(out, images, reduction="none").mean(dim=(1, 2, 3))
         psnrs.extend((10.0 * torch.log10(1.0 / mse.clamp_min(1e-10))).cpu().numpy())
-    return float(np.mean(psnrs)) if psnrs else 0.0
+        for k, m in metrics.items():
+            try:
+                acc[k] += float(m(out, images).mean()) * images.shape[0]
+            except Exception:
+                pass
+        n += images.shape[0]
+    res = {"psnr": float(np.mean(psnrs)) if psnrs else 0.0}
+    for k in metrics:
+        res[k] = acc[k] / max(n, 1)
+    return res
 
 
 def parse_args():
@@ -157,6 +202,15 @@ def parse_args():
                    help="SNR assigned to dropped packets in the spatial-CSI map")
     p.add_argument("--coherence-time", type=int, default=1)
     p.add_argument("--k-factor", type=float, default=4.0)
+
+    # loss (kaira.losses.image) + perceptual validation metrics
+    p.add_argument("--loss", default="mse",
+                   choices=["mse", "l1", "msssim", "ssim", "lpips", "vgg", "mse_lpips"],
+                   help="training loss (default mse; mse_lpips = perceptual)")
+    p.add_argument("--mse-weight", type=float, default=1.0, help="for --loss mse_lpips")
+    p.add_argument("--lpips-weight", type=float, default=1.0, help="for --loss mse_lpips")
+    p.add_argument("--lpips-net", default="alex", choices=["alex", "vgg", "squeeze"],
+                   help="LPIPS backbone for the validation metric")
 
     # optimization
     p.add_argument("--epochs", type=int, default=50)
@@ -199,7 +253,9 @@ def main() -> int:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
     use_amp = device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
-    criterion = nn.MSELoss()
+    criterion = build_loss(args.loss, device, args.mse_weight, args.lpips_weight)
+    print(f"[*] loss={args.loss}")
+    val_metrics = build_val_metrics(device, args.lpips_net) if args.val_data_dir else {}
 
     start_epoch, best_psnr = 0, 0.0
     if args.resume and os.path.isfile(args.resume):
@@ -242,10 +298,13 @@ def main() -> int:
 
         val_snr = (0.5 * (args.snr_min + args.snr_max)
                    if args.snr_min is not None else args.snr_db)
-        psnr = (validate(model, model_type, val_loader, device, args, val_snr)
-                if val_loader else -10 * np.log10(running / max(n, 1) + 1e-10))
-        print(f"[*] epoch {epoch} done in {time.time()-t0:.0f}s  "
-              f"val_psnr@{val_snr:.0f}dB={psnr:.2f}")
+        if val_loader:
+            res = validate(model, model_type, val_loader, device, args, val_snr, val_metrics)
+        else:
+            res = {"psnr": -10 * np.log10(running / max(n, 1) + 1e-10)}
+        psnr = res["psnr"]
+        mstr = "  ".join(f"{k}={v:.3f}" for k, v in res.items())
+        print(f"[*] epoch {epoch} done in {time.time()-t0:.0f}s  val@{val_snr:.0f}dB  {mstr}")
 
         torch.save({"net": model.state_dict(), "op": optimizer.state_dict(),
                     "epoch": epoch, "Ave_PSNR": max(best_psnr, psnr)},
