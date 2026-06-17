@@ -199,7 +199,8 @@ class OFDMMultipathChannel(nn.Module):
                 * (torch.randn(n, self.taps, device=device)
                    + 1j * torch.randn(n, self.taps, device=device)))
         taps_zp = torch.cat(
-            [taps, torch.zeros(n, self.n_sub - self.taps, device=device)], dim=-1)
+            [taps, torch.zeros(n, self.n_sub - self.taps, device=device,
+                               dtype=taps.dtype)], dim=-1)  # match complex dtype (MPS)
         return torch.fft.fft(taps_zp, dim=-1)  # [n, n_sub]
 
     def forward(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -252,7 +253,14 @@ class OFDMMultipathChannel(nn.Module):
         per_sym_noise = n0 / Hk.abs().pow(2).clamp_min(1e-12)      # [B, half]
         n_pkts = (half + self.packet_len - 1) // self.packet_len
         pad = n_pkts * self.packet_len - half
-        if pad > 0:                                               # NaN-pad partial last packet
-            per_sym_noise = F.pad(per_sym_noise, (0, pad), value=float("nan"))
-        pp_noise = per_sym_noise.reshape(-1, n_pkts, self.packet_len).nanmean(dim=2)
+        if pad > 0:                                  # zero-pad partial last packet
+            per_sym_noise = F.pad(per_sym_noise, (0, pad), value=0.0)
+        blocks = per_sym_noise.reshape(-1, n_pkts, self.packet_len)
+        # Per-packet mean over the *valid* symbols (the last packet holds `pad`
+        # fewer). Done as sum / count rather than NaN-padding + ``nanmean``, which
+        # returns 0 for a partially-padded block on MPS (-> spurious +inf SNR).
+        counts = torch.full((n_pkts,), float(self.packet_len), device=Hk.device)
+        if pad > 0:
+            counts[-1] = self.packet_len - pad
+        pp_noise = blocks.sum(dim=2) / counts                     # [B, n_pkts]
         return 10.0 * torch.log10((es / pp_noise).clamp_min(1e-12))   # [B, n_pkts]
