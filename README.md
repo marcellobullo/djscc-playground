@@ -104,6 +104,9 @@ Key options:
 - `--channel awgn|rayleigh|rician|none` — the (Kaira) channel.
 - `--snr-db X` (fixed) **or** `--snr-min A --snr-max B` (sampled `U[A,B]` per batch).
 - `--drop-prob P` — random packet erasure during training.
+- `--loss mse|mse_lpips|msssim|ssim|lpips|vgg` — training loss from
+  `kaira.losses.image` (`mse_lpips` = perceptual; tune with `--mse-weight` /
+  `--lpips-weight`). Validation always reports **PSNR + MS-SSIM + LPIPS**.
 - `--resume ckpts/run/last.pth`, `--push-to-hub <repo>`.
 
 `--train-data-dir` (and optional `--val-data-dir`) take one or more flat image
