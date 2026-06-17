@@ -51,6 +51,7 @@ jscc/
   djscc/             custom ConvNeXt DJSCC (channel-blind enc + FiLM CSI decoder)
   djscc_spatialcsi/  no-band variant (per-element CSI decoder, anti-banding)
   adjscc/            attention DJSCC (SNR-adaptive encoder + decoder)
+  bourtsoulatze/     Bourtsoulatze-2019 DeepJSCC baseline (fixed-SNR, non-adaptive)
   aligners/          aligner modules + BaseAligner wrapper
   conventional/      classical SSCC baseline (output_kind="bytes")  [encode/decode TODO]
 transmitter/socket_tx.py    receiver/socket_rx.py
@@ -101,12 +102,18 @@ Key options:
 
 - `--model` — HF id or local HF folder to start from. Add `--reinit` to train from
   scratch (keeps the architecture, randomizes the weights).
-- `--channel awgn|rayleigh|rician|none` — the (Kaira) channel.
+- `--channel awgn|rayleigh|rician|ofdm|none` — the channel (`ofdm` =
+  frequency-selective multipath + per-subcarrier equalization, see
+  `jscc/channels.py`; the others are Kaira channels). OFDM tuning:
+  `--ofdm-subcarriers` (match the link's `fft_len`), `--ofdm-taps`, `--ofdm-decay`,
+  `--ofdm-eq zf|mmse`.
 - `--snr-db X` (fixed) **or** `--snr-min A --snr-max B` (sampled `U[A,B]` per batch).
-- `--drop-prob P` — random packet erasure during training.
-- `--loss mse|mse_lpips|msssim|ssim|lpips|vgg` — training loss from
-  `kaira.losses.image` (`mse_lpips` = perceptual; tune with `--mse-weight` /
-  `--lpips-weight`). Validation always reports **PSNR + MS-SSIM + LPIPS**.
+- `--drop-prob P` — fixed per-packet erasure probability (each packet dropped
+  i.i.d. w.p. `P`). **Or** `--drop-min A --drop-max B` to sample the erasure rate
+  `U[A,B]` per batch — the drop-side analogue of `--snr-min/--snr-max`, so the
+  decoder sees a range of erasure conditions.
+- `--loss <name>` — training loss from `kaira.losses.image` (see **Losses**
+  below). Validation always reports **PSNR + MS-SSIM + LPIPS** regardless.
 - `--resume ckpts/run/last.pth`, `--push-to-hub <repo>`.
 
 `--train-data-dir` (and optional `--val-data-dir`) take one or more flat image
@@ -115,12 +122,42 @@ SNR (`adjscc`), or the per-element CSI map with drops → sentinel SNR
 (`djscc_spatialcsi`) — is selected automatically from the model's
 `config.model_type`.
 
+### Losses
+
+All values accepted by `--loss` (from `kaira.losses.image`; each returns a single
+minimizable scalar). Regardless of which you train with, validation always reports
+PSNR + MS-SSIM + LPIPS.
+
+| `--loss`    | Kaira class    | Optimizes / when to use |
+|-------------|----------------|-------------------------|
+| `mse`       | `MSELoss`      | Pixel MSE. Best PSNR; the default. Tends to blur texture at low rate. |
+| `l1`        | `L1Loss`       | Mean absolute error. Sharper than MSE, more robust to outliers. |
+| `ssim`      | `SSIMLoss`     | Single-scale structural similarity (luminance/contrast/structure). |
+| `msssim`    | `MSSSIMLoss`   | Multi-scale SSIM. Best perceived structure / MS-SSIM score. |
+| `vgg`       | `VGGLoss`      | VGG feature-space (perceptual); lighter-weight than LPIPS. |
+| `lpips`     | `LPIPSLoss`    | Learned perceptual (deep features). Most perceptual realism, but can hallucinate texture; downloads a small net on first use. |
+| `mse_lpips` | `MSELPIPSLoss` | Weighted MSE + LPIPS — fidelity *and* perceptual. Tune with `--mse-weight` / `--lpips-weight` (both default `1.0`). |
+
+`--lpips-net alex|vgg|squeeze` (default `alex`) selects the backbone for the LPIPS
+*validation metric* — independent of the training loss.
+
 **Train a brand-new architecture:** copy `jscc/djscc/` as a template, implement
 your `nn.py` + `configuration_*.py` / `modeling_*.py` / `codec_*.py`,
 `save_pretrained` an initialized model once, then
 `python training/train.py --model <that folder> --reinit ...`.
 
 ## Publish a model to HuggingFace
+
+Each model family has an exporter in `scripts/` that turns a raw `.pth` checkpoint
+into an `AutoModel`-loadable HF folder (`config.json` + weights + bundled
+modeling/config code, `kaira` required to load) and optionally pushes it:
+
+| Family | Script | `model_type` |
+|--------|--------|--------------|
+| Custom ConvNeXt DJSCC (scalar FiLM CSI) | `export_djscc_to_hf.py`            | `djscc` |
+| Spatial-CSI / no-band variant           | `export_djscc_spatialcsi_to_hf.py` | `djscc_spatialcsi` |
+| Attention SNR-adaptive (ADJSCC)         | `export_adjscc_to_hf.py`           | `adjscc` |
+| Bourtsoulatze-2019 baseline             | `export_bourtsoulatze_to_hf.py`    | `deepjscc_b2019` |
 
 ```bash
 python scripts/export_djscc_to_hf.py \
@@ -130,6 +167,15 @@ python scripts/export_djscc_to_hf.py \
 ```
 
 Then anyone runs `--model <your-username>/djscc-r6` — no code changes.
+
+`export_bourtsoulatze_to_hf.py` is the exception: `--ckpt` is **optional** — the
+baseline has no published checkpoint, so omitting it writes a randomly-initialized
+folder to train from scratch (no `--reinit` needed):
+
+```bash
+python scripts/export_bourtsoulatze_to_hf.py \
+    --out checkpoints/hf/bourtsoulatze-cr6 --comp-ratio 6
+```
 
 ## Add your own model
 

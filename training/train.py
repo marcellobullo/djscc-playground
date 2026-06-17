@@ -173,6 +173,12 @@ def sample_snr(args) -> float:
     return float(args.snr_db)
 
 
+def sample_drop(args) -> float:
+    if args.drop_min is not None and args.drop_max is not None:
+        return float(np.random.uniform(args.drop_min, args.drop_max))
+    return float(args.drop_prob)
+
+
 @torch.no_grad()
 def validate(model, model_type, loader, device, args, snr_val, metrics):
     model.eval()
@@ -217,7 +223,11 @@ def parse_args():
     p.add_argument("--snr-min", type=float, default=None,
                    help="with --snr-max, sample SNR ~ U[min,max] per batch")
     p.add_argument("--snr-max", type=float, default=None)
-    p.add_argument("--drop-prob", type=float, default=0.0)
+    p.add_argument("--drop-prob", type=float, default=0.0,
+                   help="fixed per-packet erasure probability")
+    p.add_argument("--drop-min", type=float, default=None,
+                   help="with --drop-max, sample drop prob ~ U[min,max] per batch")
+    p.add_argument("--drop-max", type=float, default=None)
     p.add_argument("--packet-len", type=int, default=960)
     p.add_argument("--sentinel-db", type=float, default=-20.0,
                    help="SNR assigned to dropped packets in the spatial-CSI map")
@@ -298,7 +308,9 @@ def main() -> int:
 
     snr_desc = (f"U[{args.snr_min},{args.snr_max}]"
                 if args.snr_min is not None else f"{args.snr_db} dB")
-    print(f"[*] channel={args.channel} snr={snr_desc} drop={args.drop_prob} "
+    drop_desc = (f"U[{args.drop_min},{args.drop_max}]"
+                 if args.drop_min is not None else f"{args.drop_prob}")
+    print(f"[*] channel={args.channel} snr={snr_desc} drop={drop_desc} "
           f"epochs={args.epochs} bs={args.batch_size}")
 
     for epoch in range(start_epoch, args.epochs):
@@ -309,12 +321,13 @@ def main() -> int:
         for i, (images, _) in enumerate(train_loader):
             images = images.to(device)
             snr = sample_snr(args)
+            drop = sample_drop(args)
             channel = make_channel(args.channel, snr, args.coherence_time,
                                    args.k_factor, args.ofdm_taps, args.ofdm_decay,
                                    args.ofdm_subcarriers, args.ofdm_eq, args.packet_len)
             with torch.autocast(device_type=device.type, enabled=use_amp):
                 out = forward_train(model, model_type, images, snr, channel,
-                                    args.drop_prob, args.packet_len, args.sentinel_db)
+                                    drop, args.packet_len, args.sentinel_db)
                 loss = criterion(out, images) / args.accum_steps
             scaler.scale(loss).backward() if use_amp else loss.backward()
             if (i + 1) % args.accum_steps == 0:
