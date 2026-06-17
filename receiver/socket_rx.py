@@ -142,15 +142,34 @@ def receive_loop(codec, socket, snr_socket, args):
             if pwr > 0:
                 symbols *= np.complex64(np.sqrt(args.renorm_target / pwr))
 
-        # live SNR -> decoder CSI
+        # live SNR -> decoder CSI. Build a per-packet effective-SNR vector
+        # (post-EQ: 10log10(1 / mean(sigma2/|H_k|^2))) indexed by slot, and feed it
+        # via set_csi_vector when the decoder consumes a per-packet map (spatial
+        # CSI). Otherwise collapse to one scalar, as before.
         if snr_socket is not None and codec.needs_csi:
+            use_vec = hasattr(codec, "set_csi_vector")
+            per_pkt = np.full(PKT_PER_IMG, np.nan, dtype=np.float32)
             noise = []
-            for pn, _ in pn_log:
+            for pn, slot in pn_log:
                 h, s2 = h_by_pn.get(pn), raw_by_pn.get(pn)
                 if h is not None and s2 is not None:
                     hp = np.maximum(np.abs(h[_DATA_IDX]) ** 2, 1e-12)
-                    noise.append(float((s2 / hp).mean()))
-            if noise:
+                    npw = float((s2 / hp).mean())
+                    noise.append(npw)
+                    if npw > 0:
+                        per_pkt[slot] = 10.0 * np.log10(1.0 / npw)
+            if use_vec and np.isfinite(per_pkt).any():
+                # seen-but-unestimated slots -> average CSI; missing slots stay
+                # NaN -> the codec maps them to the drop sentinel.
+                fill = float(np.nanmean(per_pkt))
+                for i in range(PKT_PER_IMG):
+                    if not np.isfinite(per_pkt[i]) and seen[i]:
+                        per_pkt[i] = fill
+                codec.set_csi_vector(per_pkt)
+                nfin = int(np.isfinite(per_pkt).sum())
+                print(f"  [snr] per-packet over {nfin}/{PKT_PER_IMG} pkts, "
+                      f"mean={np.nanmean(per_pkt):.2f} dB")
+            elif noise:
                 avg = float(np.mean(noise))
                 snr = 10.0 * np.log10(1.0 / avg) if avg > 0 else args.snr_db
                 codec.set_csi(snr)

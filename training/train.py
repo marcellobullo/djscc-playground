@@ -44,6 +44,8 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from jscc.data import make_loader  # noqa: E402
+from jscc.channels import (  # noqa: E402
+    FlatFadingChannel, OFDMMultipathChannel, ScalarCSIChannel, reconcile_csi)
 from jscc.adjscc.nn import powerConstraint  # noqa: E402
 from jscc.djscc_spatialcsi.nn import packetwise_to_element_map  # noqa: E402
 
@@ -59,19 +61,30 @@ def get_device(s: str) -> torch.device:
 
 
 def make_channel(name: str, snr_db: float, coherence_time: int = 1,
-                 k_factor: float = 4.0):
-    """Build a Kaira channel for the given (per-batch) SNR. None = no channel."""
+                 k_factor: float = 4.0, ofdm_taps: int = 8, ofdm_decay: float = 4.0,
+                 ofdm_subcarriers: int = 64, ofdm_eq: str = "zf",
+                 packet_len: int = 960):
+    """Build the channel for the given (per-batch) SNR. None = no channel.
+
+    Every channel obeys the ``(y, csi)`` contract (see jscc.channels). awgn /
+    rayleigh / rician are flat Kaira channels wrapped to report the nominal SNR as
+    a scalar CSI. ofdm is the frequency-selective multipath channel (post
+    per-subcarrier equalization) and reports a per-packet CSI vector, matching the
+    real OFDM link + GR receiver."""
     name = name.lower()
     if name in ("none", "identity"):
         return None
-    from kaira.channels import AWGNChannel, FlatFadingChannel
-    if name == "awgn":
-        return AWGNChannel(snr_db=snr_db)
+    if name in ("ofdm", "multipath", "freqsel"):
+        return OFDMMultipathChannel(snr_db=snr_db, taps=ofdm_taps, decay=ofdm_decay,
+                                    n_subcarriers=ofdm_subcarriers, equalizer=ofdm_eq,
+                                    packet_len=packet_len)
     if name in ("rayleigh", "rician"):
-        kw = {"k_factor": k_factor} if name == "rician" else {}
-        return FlatFadingChannel(fading_type=name, coherence_time=coherence_time,
-                                 snr_db=snr_db, **kw)
-    raise ValueError(f"unknown --channel {name!r} (awgn|rayleigh|rician|none)")
+        return FlatFadingChannel(snr_db=snr_db, fading_type=name, k_factor=k_factor)
+    from kaira.channels import AWGNChannel
+    if name == "awgn":
+        return ScalarCSIChannel(AWGNChannel(snr_db=snr_db), snr_db)
+    raise ValueError(
+        f"unknown --channel {name!r} (awgn|rayleigh|rician|ofdm|none)")
 
 
 def build_loss(name: str, device, mse_weight: float = 1.0, lpips_weight: float = 1.0):
@@ -124,9 +137,14 @@ def forward_train(model, model_type, images, snr, channel, drop_prob,
         z = model.encoder(images)
         z = model.constraint(z)
 
-    # --- channel noise ------------------------------------------------------
+    # --- channel + its CSI --------------------------------------------------
+    # Each channel reports its own CSI (effective SNR, dB): scalar [B,1] for the
+    # flat channels, per-packet vector [B,n_pkts] for ofdm. The decoder then gets
+    # whatever granularity it consumes via reconcile_csi.
     if channel is not None:
-        z = channel(z)
+        z, csi = channel(z)
+    else:
+        csi = snr_t                       # no channel: nominal scalar SNR
 
     # --- packet drops (symbol-accurate, shared across families) ------------
     tcn, h, w = z.shape[1], z.shape[2], z.shape[3]
@@ -140,13 +158,13 @@ def forward_train(model, model_type, images, snr, channel, drop_prob,
 
     # --- decode (per-family conditioning) ----------------------------------
     if model_type == "djscc_spatialcsi":
-        per_pkt = torch.full((B, n_pkts), float(snr), device=dev)
+        per_pkt = reconcile_csi(csi, "vector", n_pkts)      # [B, n_pkts] (dB)
         if drop_mask is not None:
             per_pkt = per_pkt.masked_fill(drop_mask, sentinel_db)
         csi_map = packetwise_to_element_map(
             per_pkt, M=tcn, H=h, W=w, pkt_len_complex=packet_len)
         return model.decoder(z, csi_map)
-    return model.decoder(z, snr_t)
+    return model.decoder(z, reconcile_csi(csi, "scalar", n_pkts))
 
 
 def sample_snr(args) -> float:
@@ -163,7 +181,9 @@ def validate(model, model_type, loader, device, args, snr_val, metrics):
     n = 0
     for images, _ in loader:
         images = images.to(device)
-        ch = make_channel(args.channel, snr_val, args.coherence_time, args.k_factor)
+        ch = make_channel(args.channel, snr_val, args.coherence_time, args.k_factor,
+                          args.ofdm_taps, args.ofdm_decay, args.ofdm_subcarriers,
+                          args.ofdm_eq, args.packet_len)
         out = forward_train(model, model_type, images, snr_val, ch,
                             0.0, args.packet_len, args.sentinel_db).clamp(0.0, 1.0)
         mse = F.mse_loss(out, images, reduction="none").mean(dim=(1, 2, 3))
@@ -191,7 +211,8 @@ def parse_args():
 
     # channel / SNR / drops
     p.add_argument("--channel", default="awgn",
-                   choices=["awgn", "rayleigh", "rician", "none"])
+                   choices=["awgn", "rayleigh", "rician", "ofdm", "none"],
+                   help="ofdm = frequency-selective multipath + per-subcarrier EQ")
     p.add_argument("--snr-db", type=float, default=10.0, help="fixed SNR (dB)")
     p.add_argument("--snr-min", type=float, default=None,
                    help="with --snr-max, sample SNR ~ U[min,max] per batch")
@@ -202,6 +223,15 @@ def parse_args():
                    help="SNR assigned to dropped packets in the spatial-CSI map")
     p.add_argument("--coherence-time", type=int, default=1)
     p.add_argument("--k-factor", type=float, default=4.0)
+    # --channel ofdm (frequency-selective multipath, post-equalization)
+    p.add_argument("--ofdm-taps", type=int, default=8,
+                   help="multipath taps L / delay spread (1 == flat)")
+    p.add_argument("--ofdm-decay", type=float, default=4.0,
+                   help="exponential power-delay-profile decay constant")
+    p.add_argument("--ofdm-subcarriers", type=int, default=64,
+                   help="OFDM FFT size (match the link's fft_len)")
+    p.add_argument("--ofdm-eq", default="zf", choices=["zf", "mmse"],
+                   help="per-subcarrier equalizer modeled at the receiver")
 
     # loss (kaira.losses.image) + perceptual validation metrics
     p.add_argument("--loss", default="mse",
@@ -279,7 +309,9 @@ def main() -> int:
         for i, (images, _) in enumerate(train_loader):
             images = images.to(device)
             snr = sample_snr(args)
-            channel = make_channel(args.channel, snr, args.coherence_time, args.k_factor)
+            channel = make_channel(args.channel, snr, args.coherence_time,
+                                   args.k_factor, args.ofdm_taps, args.ofdm_decay,
+                                   args.ofdm_subcarriers, args.ofdm_eq, args.packet_len)
             with torch.autocast(device_type=device.type, enabled=use_amp):
                 out = forward_train(model, model_type, images, snr, channel,
                                     args.drop_prob, args.packet_len, args.sentinel_db)
