@@ -71,7 +71,7 @@ blocks:
     bus_structure: null
     coordinate: [0, 352.0]
     rotation: 0
-    state: enabled
+    state: disabled
 - name: header_formatter_rx
   id: variable
   parameters:
@@ -85,6 +85,21 @@ blocks:
     coordinate: [0, 416.0]
     rotation: 0
     state: disabled
+- name: header_formatter_rx
+  id: variable
+  parameters:
+    comment: ''
+    value: deepjscc.packet_header_ofdm_robust(occupied_carriers, n_syms=1, len_tag_key="packet_len",   frame_len_tag_key="frame_len",
+      num_tag_key="packet_num", bits_per_header_sym=header_mod.bits_per_symbol(),
+      bits_per_payload_sym=8, scramble_header=True,  expected_packet_len=packet_len,
+      num_bits=16,use_fec=True)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [112, 416.0]
+    rotation: 0
+    state: enabled
 - name: header_mod
   id: variable
   parameters:
@@ -413,23 +428,24 @@ blocks:
   id: epy_block
   parameters:
     _source_code: "\"\"\"Header-gated channel-tap logger with packet_len validation.\"\
-      \"\"\n\nimport threading\nimport numpy as np\nimport pmt\nfrom gnuradio import\
-      \ gr\n\n\nclass blk(gr.sync_block):\n    def __init__(self, fft_len=64, packet_len=960,\n\
-      \                 out_path='/tmp/h_dataset.npz', flush_every=200):\n       \
-      \ gr.sync_block.__init__(\n            self,\n            name='chan_taps_logger',\n\
-      \            in_sig=[(np.complex64, fft_len)],\n            out_sig=[(np.complex64,\
-      \ fft_len)],\n        )\n        self.fft_len = int(fft_len)\n        self.packet_len\
-      \ = int(packet_len)\n        self.out_path = str(out_path)\n        self.flush_every\
-      \ = int(flush_every)\n        self.tag_key = pmt.intern('ofdm_sync_chan_taps')\n\
-      \        self.pkt_num_key = pmt.intern('packet_num')\n        self.pkt_len_key\
-      \ = pmt.intern('packet_len')\n        self.pending = []\n        self.max_pending\
-      \ = 8\n        self.pn_list = []\n        self.h_list = []\n        self.n_rejected\
-      \ = 0\n        self._lock = threading.Lock()\n        self.msg_port = pmt.intern('header_valid')\n\
-      \        self.message_port_register_in(self.msg_port)\n        self.set_msg_handler(self.msg_port,\
-      \ self._on_header_valid)\n        self.snr_part_port = pmt.intern('snr_part')\n\
-      \        self.message_port_register_out(self.snr_part_port)\n\n    def _extract_int(self,\
-      \ msg, key):\n        sentinel = pmt.from_long(-(1 << 30))\n        candidates\
-      \ = [msg]\n        try:\n            if pmt.is_pair(msg):\n                candidates.append(pmt.car(msg))\n\
+      \"\"\n\nimport threading\nimport numpy as np\nimport pmt\nimport zmq\nfrom gnuradio\
+      \ import gr\n\n\nclass blk(gr.sync_block):\n    def __init__(self, fft_len=64,\
+      \ packet_len=960,\n                 out_path='/tmp/h_dataset.npz',\n       \
+      \          snr_addr='tcp://127.0.0.1:5560', flush_every=200):\n        gr.sync_block.__init__(\n\
+      \            self,\n            name='chan_taps_logger',\n            in_sig=[(np.complex64,\
+      \ fft_len)],\n            out_sig=[(np.complex64, fft_len)],\n        )\n  \
+      \      self.fft_len = int(fft_len)\n        self.packet_len = int(packet_len)\n\
+      \        self.out_path = str(out_path)\n        self.flush_every = int(flush_every)\n\
+      \        self.tag_key = pmt.intern('ofdm_sync_chan_taps')\n        self.pkt_num_key\
+      \ = pmt.intern('packet_num')\n        self.pkt_len_key = pmt.intern('packet_len')\n\
+      \        self.pending = []\n        self.max_pending = 8\n        self.pn_list\
+      \ = []\n        self.h_list = []\n        self.n_rejected = 0\n        self._lock\
+      \ = threading.Lock()\n        self.msg_port = pmt.intern('header_valid')\n \
+      \       self.message_port_register_in(self.msg_port)\n        self.set_msg_handler(self.msg_port,\
+      \ self._on_header_valid)\n        self.snr_addr = str(snr_addr)\n        self._ctx\
+      \ = None\n        self._sock = None\n\n    def _extract_int(self, msg, key):\n\
+      \        sentinel = pmt.from_long(-(1 << 30))\n        candidates = [msg]\n\
+      \        try:\n            if pmt.is_pair(msg):\n                candidates.append(pmt.car(msg))\n\
       \        except Exception:\n            pass\n        for cand in candidates:\n\
       \            try:\n                val = pmt.dict_ref(cand, key, sentinel)\n\
       \                if not pmt.equal(val, sentinel):\n                    return\
@@ -445,21 +461,28 @@ blocks:
       \        meta = pmt.make_dict()\n        meta = pmt.dict_add(meta, pmt.intern('packet_num'),\
       \ pmt.from_long(int(pn)))\n        meta = pmt.dict_add(meta, pmt.intern('kind'),\
       \ pmt.intern('h'))\n        payload = pmt.init_c32vector(self.fft_len, h_finalized.tolist())\n\
-      \        self.message_port_pub(self.snr_part_port, pmt.cons(meta, payload))\n\
-      \n    def _flush(self):\n        if not self.pn_list:\n            return\n\
-      \        np.savez(self.out_path,\n                 packet_num=np.array(self.pn_list,\
-      \ dtype=np.int64),\n                 h=np.array(self.h_list, dtype=np.complex64))\n\
-      \n    def work(self, input_items, output_items):\n        in0 = input_items[0]\n\
-      \        out0 = output_items[0]\n        out0[:] = in0\n        n = len(in0)\n\
-      \        for tag in self.get_tags_in_window(0, 0, n, self.tag_key):\n      \
-      \      taps = np.array(pmt.c32vector_elements(tag.value), dtype=np.complex64)\n\
-      \            with self._lock:\n                self.pending.append(taps)\n \
-      \               if len(self.pending) > self.max_pending:\n                 \
-      \   self.pending = self.pending[-self.max_pending:]\n        return n\n\n  \
-      \  def stop(self):\n        with self._lock:\n            self._flush()\n  \
-      \      print('[chan_taps_logger] committed=%d rejected=%d -> %s'\n         \
-      \     % (len(self.pn_list), self.n_rejected, self.out_path))\n        return\
-      \ True\n"
+      \        self._send_nb(pmt.cons(meta, payload))\n\n    def _flush(self):\n \
+      \       if not self.pn_list:\n            return\n        np.savez(self.out_path,\n\
+      \                 packet_num=np.array(self.pn_list, dtype=np.int64),\n     \
+      \            h=np.array(self.h_list, dtype=np.complex64))\n\n    def work(self,\
+      \ input_items, output_items):\n        in0 = input_items[0]\n        out0 =\
+      \ output_items[0]\n        out0[:] = in0\n        n = len(in0)\n        for\
+      \ tag in self.get_tags_in_window(0, 0, n, self.tag_key):\n            taps =\
+      \ np.array(pmt.c32vector_elements(tag.value), dtype=np.complex64)\n        \
+      \    with self._lock:\n                self.pending.append(taps)\n         \
+      \       if len(self.pending) > self.max_pending:\n                    self.pending\
+      \ = self.pending[-self.max_pending:]\n        return n\n\n    def start(self):\n\
+      \        self._ctx = zmq.Context.instance()\n        self._sock = self._ctx.socket(zmq.PUSH)\n\
+      \        self._sock.setsockopt(zmq.LINGER, 0)\n        self._sock.setsockopt(zmq.SNDHWM,\
+      \ 1000)\n        self._sock.connect(self.snr_addr)\n        return True\n\n\
+      \    def _send_nb(self, pdu):\n        s = self._sock\n        if s is None:\n\
+      \            return\n        try:\n            s.send(pmt.serialize_str(pdu),\
+      \ flags=zmq.NOBLOCK)\n        except (zmq.Again, zmq.ZMQError):\n          \
+      \  pass\n\n    def stop(self):\n        with self._lock:\n            self._flush()\n\
+      \        print('[chan_taps_logger] committed=%d rejected=%d -> %s'\n       \
+      \       % (len(self.pn_list), self.n_rejected, self.out_path))\n        if self._sock\
+      \ is not None:\n            try:\n                self._sock.close(0)\n    \
+      \        except Exception:\n                pass\n        return True\n"
     affinity: ''
     alias: ''
     comment: Logs per-frame (packet_num, h) to .npz (header-gated, packet_len validated)
@@ -469,11 +492,13 @@ blocks:
     minoutbuf: '0'
     out_path: '"/tmp/h_dataset.npz"'
     packet_len: packet_len
+    snr_addr: '"tcp://127.0.0.1:5560"'
   states:
     _io_cache: ('chan_taps_logger', 'blk', [('fft_len', '64'), ('packet_len', '960'),
-      ('out_path', "'/tmp/h_dataset.npz'"), ('flush_every', '200')], [('0', 'complex',
-      64), ('header_valid', 'message', 1)], [('0', 'complex', 64), ('snr_part', 'message',
-      1)], '', ['fft_len', 'flush_every', 'out_path', 'packet_len'])
+      ('out_path', "'/tmp/h_dataset.npz'"), ('snr_addr', "'tcp://127.0.0.1:5560'"),
+      ('flush_every', '200')], [('0', 'complex', 64), ('header_valid', 'message',
+      1)], [('0', 'complex', 64)], '', ['fft_len', 'flush_every', 'out_path', 'packet_len',
+      'snr_addr'])
     bus_sink: false
     bus_source: false
     bus_structure: null
@@ -753,7 +778,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [0, 80.0]
+    coordinate: [272, 24.0]
     rotation: 0
     state: enabled
 - name: import_deepjscc_0
@@ -766,7 +791,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [280, 56.0]
+    coordinate: [272, 56.0]
     rotation: 0
     state: enabled
 - name: pdu_tagged_stream_to_pdu_0
@@ -860,23 +885,23 @@ blocks:
   id: epy_block
   parameters:
     _source_code: "\"\"\"Per-frame equalized-pilot logger for offline SNR estimation.\"\
-      \"\"\n\nimport threading\nimport numpy as np\nimport pmt\nfrom gnuradio import\
-      \ gr\n\n\nclass blk(gr.sync_block):\n    def __init__(self, fft_len=64,\n  \
-      \               pilot_positions=[11, 25, 39, 53],\n                 pilot_symbols=[1.0,\
+      \"\"\n\nimport threading\nimport numpy as np\nimport pmt\nimport zmq\nfrom gnuradio\
+      \ import gr\n\n\nclass blk(gr.sync_block):\n    def __init__(self, fft_len=64,\n\
+      \                 pilot_positions=[11, 25, 39, 53],\n                 pilot_symbols=[1.0,\
       \ 1.0, 1.0, -1.0],\n                 out_path='/tmp/pilot_dataset.npz',\n  \
-      \               flush_every=200):\n        gr.sync_block.__init__(\n       \
-      \     self,\n            name='pilot_snr_logger',\n            in_sig=[(np.complex64,\
-      \ fft_len)],\n            out_sig=None,\n        )\n        self.fft_len = int(fft_len)\n\
-      \        self.pilot_positions = np.array(pilot_positions, dtype=np.int64)\n\
-      \        self.pilot_symbols = np.array(pilot_symbols, dtype=np.complex64)\n\
-      \        self.out_path = str(out_path)\n        self.flush_every = int(flush_every)\n\
-      \        self.pkt_num_key = pmt.intern('packet_num')\n        self.frame_len_key\
-      \ = pmt.intern('frame_len')\n\n        self._curr_pn = None\n        self._curr_fl\
-      \ = 0\n        self._curr_consumed = 0\n        self._curr_pilots = []\n\n \
-      \       self.pn_list = []\n        self.mean_pilots_list = []\n        self.sigma2_list\
-      \ = []\n        self._lock = threading.Lock()\n        self.snr_part_port =\
-      \ pmt.intern('snr_part')\n        self.message_port_register_out(self.snr_part_port)\n\
-      \n    def work(self, input_items, output_items):\n        in0 = input_items[0]\n\
+      \               snr_addr='tcp://127.0.0.1:5560',\n                 flush_every=200):\n\
+      \        gr.sync_block.__init__(\n            self,\n            name='pilot_snr_logger',\n\
+      \            in_sig=[(np.complex64, fft_len)],\n            out_sig=None,\n\
+      \        )\n        self.fft_len = int(fft_len)\n        self.pilot_positions\
+      \ = np.array(pilot_positions, dtype=np.int64)\n        self.pilot_symbols =\
+      \ np.array(pilot_symbols, dtype=np.complex64)\n        self.out_path = str(out_path)\n\
+      \        self.flush_every = int(flush_every)\n        self.pkt_num_key = pmt.intern('packet_num')\n\
+      \        self.frame_len_key = pmt.intern('frame_len')\n\n        self._curr_pn\
+      \ = None\n        self._curr_fl = 0\n        self._curr_consumed = 0\n     \
+      \   self._curr_pilots = []\n\n        self.pn_list = []\n        self.mean_pilots_list\
+      \ = []\n        self.sigma2_list = []\n        self._lock = threading.Lock()\n\
+      \        self.snr_addr = str(snr_addr)\n        self._ctx = None\n        self._sock\
+      \ = None\n\n    def work(self, input_items, output_items):\n        in0 = input_items[0]\n\
       \        n = len(in0)\n        nread = self.nitems_read(0)\n\n        tag_map\
       \ = {}\n        for tag in self.get_tags_in_window(0, 0, n, self.pkt_num_key):\n\
       \            tag_map.setdefault(int(tag.offset - nread), {})['pn'] = pmt.to_long(tag.value)\n\
@@ -902,16 +927,24 @@ blocks:
       \ self._flush()\n        meta = pmt.make_dict()\n        meta = pmt.dict_add(meta,\
       \ pmt.intern('packet_num'), pmt.from_long(pn_finalized))\n        meta = pmt.dict_add(meta,\
       \ pmt.intern('kind'), pmt.intern('pilots'))\n        meta = pmt.dict_add(meta,\
-      \ pmt.intern('sigma2'), pmt.from_double(sigma2))\n        self.message_port_pub(self.snr_part_port,\
-      \ pmt.cons(meta, pmt.PMT_NIL))\n        self._curr_pn = None\n        self._curr_pilots\
-      \ = []\n        self._curr_consumed = 0\n        self._curr_fl = 0\n\n    def\
-      \ _flush(self):\n        if not self.pn_list:\n            return\n        np.savez(self.out_path,\n\
+      \ pmt.intern('sigma2'), pmt.from_double(sigma2))\n        self._send_nb(pmt.cons(meta,\
+      \ pmt.PMT_NIL))\n        self._curr_pn = None\n        self._curr_pilots = []\n\
+      \        self._curr_consumed = 0\n        self._curr_fl = 0\n\n    def _flush(self):\n\
+      \        if not self.pn_list:\n            return\n        np.savez(self.out_path,\n\
       \                 packet_num=np.array(self.pn_list, dtype=np.int64),\n     \
       \            mean_pilots=np.array(self.mean_pilots_list, dtype=np.complex64),\n\
       \                 sigma2=np.array(self.sigma2_list, dtype=np.float32))\n\n \
-      \   def stop(self):\n        with self._lock:\n            self._flush()\n \
-      \       print('[pilot_snr_logger] saved %d frames -> %s'\n              % (len(self.pn_list),\
-      \ self.out_path))\n        return True\n"
+      \   def start(self):\n        self._ctx = zmq.Context.instance()\n        self._sock\
+      \ = self._ctx.socket(zmq.PUSH)\n        self._sock.setsockopt(zmq.LINGER, 0)\n\
+      \        self._sock.setsockopt(zmq.SNDHWM, 1000)\n        self._sock.connect(self.snr_addr)\n\
+      \        return True\n\n    def _send_nb(self, pdu):\n        s = self._sock\n\
+      \        if s is None:\n            return\n        try:\n            s.send(pmt.serialize_str(pdu),\
+      \ flags=zmq.NOBLOCK)\n        except (zmq.Again, zmq.ZMQError):\n          \
+      \  pass\n\n    def stop(self):\n        with self._lock:\n            self._flush()\n\
+      \        print('[pilot_snr_logger] saved %d frames -> %s'\n              % (len(self.pn_list),\
+      \ self.out_path))\n        if self._sock is not None:\n            try:\n  \
+      \              self._sock.close(0)\n            except Exception:\n        \
+      \        pass\n        return True\n"
     affinity: ''
     alias: ''
     comment: Per-frame equalized pilot logger for SNR estimation
@@ -922,12 +955,13 @@ blocks:
     out_path: '"/tmp/pilot_dataset.npz"'
     pilot_positions: '[11, 25, 39, 53]'
     pilot_symbols: '[1.0, 1.0, 1.0, -1.0]'
+    snr_addr: '"tcp://127.0.0.1:5560"'
   states:
     _io_cache: ('pilot_snr_logger', 'blk', [('fft_len', '64'), ('pilot_positions',
       '[11, 25, 39, 53]'), ('pilot_symbols', '[1.0, 1.0, 1.0, -1.0]'), ('out_path',
-      "'/tmp/pilot_dataset.npz'"), ('flush_every', '200')], [('0', 'complex', 64)],
-      [('snr_part', 'message', 1)], '', ['fft_len', 'flush_every', 'out_path', 'pilot_positions',
-      'pilot_symbols'])
+      "'/tmp/pilot_dataset.npz'"), ('snr_addr', "'tcp://127.0.0.1:5560'"), ('flush_every',
+      '200')], [('0', 'complex', 64)], [], '', ['fft_len', 'flush_every', 'out_path',
+      'pilot_positions', 'pilot_symbols', 'snr_addr'])
     bus_sink: false
     bus_source: false
     bus_structure: null
@@ -1360,23 +1394,23 @@ blocks:
 - name: raw_noise_logger_0
   id: epy_block
   parameters:
-    _source_code: "import threading\nimport numpy as np\nimport pmt\nfrom gnuradio\
-      \ import gr\n\nclass blk(gr.sync_block):\n    def __init__(self, fft_len=64,\
-      \ null_positions=[0, 1, 2, 3, 4, 5, 59, 60, 61, 62, 63], out_path='/tmp/raw_noise_dataset.npz',\
-      \ flush_every=200):\n        gr.sync_block.__init__(self, name='raw_noise_logger',\
-      \ in_sig=[(np.complex64, fft_len)], out_sig=None)\n        self.fft_len = int(fft_len)\n\
-      \        self.null_positions = np.array(null_positions, dtype=np.int64)\n  \
-      \      self.out_path = str(out_path)\n        self.flush_every = int(flush_every)\n\
-      \        self.pkt_num_key = pmt.intern('packet_num')\n        self.frame_len_key\
-      \ = pmt.intern('frame_len')\n        self._curr_pn = None\n        self._curr_fl\
-      \ = 0\n        self._curr_consumed = 0\n        self._curr_noise_pwrs = []\n\
-      \        self.pn_list = []\n        self.sigma2_list = []\n        self._lock\
-      \ = threading.Lock()\n        self.snr_part_port = pmt.intern('snr_part')\n\
-      \        self.message_port_register_out(self.snr_part_port)\n\n    def work(self,\
-      \ input_items, output_items):\n        in0 = input_items[0]\n        n = len(in0)\n\
-      \        nread = self.nitems_read(0)\n        tag_map = {}\n        for tag\
-      \ in self.get_tags_in_window(0, 0, n, self.pkt_num_key):\n            tag_map.setdefault(int(tag.offset\
-      \ - nread), {})['pn'] = pmt.to_long(tag.value)\n        for tag in self.get_tags_in_window(0,\
+    _source_code: "import threading\nimport numpy as np\nimport pmt\nimport zmq\n\
+      from gnuradio import gr\n\nclass blk(gr.sync_block):\n    def __init__(self,\
+      \ fft_len=64, null_positions=[0, 1, 2, 3, 4, 5, 59, 60, 61, 62, 63], out_path='/tmp/raw_noise_dataset.npz',\
+      \ snr_addr='tcp://127.0.0.1:5560', flush_every=200):\n        gr.sync_block.__init__(self,\
+      \ name='raw_noise_logger', in_sig=[(np.complex64, fft_len)], out_sig=None)\n\
+      \        self.fft_len = int(fft_len)\n        self.null_positions = np.array(null_positions,\
+      \ dtype=np.int64)\n        self.out_path = str(out_path)\n        self.flush_every\
+      \ = int(flush_every)\n        self.pkt_num_key = pmt.intern('packet_num')\n\
+      \        self.frame_len_key = pmt.intern('frame_len')\n        self._curr_pn\
+      \ = None\n        self._curr_fl = 0\n        self._curr_consumed = 0\n     \
+      \   self._curr_noise_pwrs = []\n        self.pn_list = []\n        self.sigma2_list\
+      \ = []\n        self._lock = threading.Lock()\n        self.snr_addr = str(snr_addr)\n\
+      \        self._ctx = None\n        self._sock = None\n\n    def work(self, input_items,\
+      \ output_items):\n        in0 = input_items[0]\n        n = len(in0)\n     \
+      \   nread = self.nitems_read(0)\n        tag_map = {}\n        for tag in self.get_tags_in_window(0,\
+      \ 0, n, self.pkt_num_key):\n            tag_map.setdefault(int(tag.offset -\
+      \ nread), {})['pn'] = pmt.to_long(tag.value)\n        for tag in self.get_tags_in_window(0,\
       \ 0, n, self.frame_len_key):\n            tag_map.setdefault(int(tag.offset\
       \ - nread), {})['fl'] = pmt.to_long(tag.value)\n\n        for i in range(n):\n\
       \            if i in tag_map:\n                self._finalize_frame()\n    \
@@ -1397,14 +1431,22 @@ blocks:
       \ self._flush()\n        meta = pmt.make_dict()\n        meta = pmt.dict_add(meta,\
       \ pmt.intern('packet_num'), pmt.from_long(pn_finalized))\n        meta = pmt.dict_add(meta,\
       \ pmt.intern('kind'), pmt.intern('raw'))\n        meta = pmt.dict_add(meta,\
-      \ pmt.intern('sigma2'), pmt.from_double(avg_sigma2))\n        self.message_port_pub(self.snr_part_port,\
-      \ pmt.cons(meta, pmt.PMT_NIL))\n        self._curr_pn = None\n        self._curr_noise_pwrs\
+      \ pmt.intern('sigma2'), pmt.from_double(avg_sigma2))\n        self._send_nb(pmt.cons(meta,\
+      \ pmt.PMT_NIL))\n        self._curr_pn = None\n        self._curr_noise_pwrs\
       \ = []\n        self._curr_consumed = 0\n        self._curr_fl = 0\n\n    def\
       \ _flush(self):\n        if not self.pn_list:\n            return\n        np.savez(self.out_path,\
       \ packet_num=np.array(self.pn_list, dtype=np.int64), sigma2=np.array(self.sigma2_list,\
-      \ dtype=np.float32))\n\n    def stop(self):\n        with self._lock:\n    \
-      \        self._flush()\n        print('[raw_noise_logger] saved %d frames ->\
-      \ %s' % (len(self.pn_list), self.out_path))\n        return True\n"
+      \ dtype=np.float32))\n\n    def start(self):\n        self._ctx = zmq.Context.instance()\n\
+      \        self._sock = self._ctx.socket(zmq.PUSH)\n        self._sock.setsockopt(zmq.LINGER,\
+      \ 0)\n        self._sock.setsockopt(zmq.SNDHWM, 1000)\n        self._sock.connect(self.snr_addr)\n\
+      \        return True\n\n    def _send_nb(self, pdu):\n        s = self._sock\n\
+      \        if s is None:\n            return\n        try:\n            s.send(pmt.serialize_str(pdu),\
+      \ flags=zmq.NOBLOCK)\n        except (zmq.Again, zmq.ZMQError):\n          \
+      \  pass\n\n    def stop(self):\n        with self._lock:\n            self._flush()\n\
+      \        print('[raw_noise_logger] saved %d frames -> %s' % (len(self.pn_list),\
+      \ self.out_path))\n        if self._sock is not None:\n            try:\n  \
+      \              self._sock.close(0)\n            except Exception:\n        \
+      \        pass\n        return True\n"
     affinity: ''
     alias: ''
     comment: Logs pre-equalization noise from null subcarriers
@@ -1414,11 +1456,12 @@ blocks:
     minoutbuf: '0'
     null_positions: '[0, 1, 2, 3, 4, 5, 59, 60, 61, 62, 63]'
     out_path: '"/tmp/raw_noise_dataset.npz"'
+    snr_addr: '"tcp://127.0.0.1:5560"'
   states:
     _io_cache: ('raw_noise_logger', 'blk', [('fft_len', '64'), ('null_positions',
       '[0, 1, 2, 3, 4, 5, 59, 60, 61, 62, 63]'), ('out_path', "'/tmp/raw_noise_dataset.npz'"),
-      ('flush_every', '200')], [('0', 'complex', 64)], [('snr_part', 'message', 1)],
-      '', ['fft_len', 'flush_every', 'null_positions', 'out_path'])
+      ('snr_addr', "'tcp://127.0.0.1:5560'"), ('flush_every', '200')], [('0', 'complex',
+      64)], [], '', ['fft_len', 'flush_every', 'null_positions', 'out_path', 'snr_addr'])
     bus_sink: false
     bus_source: false
     bus_structure: null
@@ -1975,22 +2018,6 @@ blocks:
     coordinate: [1688, 928.0]
     rotation: 0
     state: enabled
-- name: zeromq_push_msg_sink_1
-  id: zeromq_push_msg_sink
-  parameters:
-    address: tcp://127.0.0.1:5560
-    affinity: ''
-    alias: ''
-    bind: 'True'
-    comment: ''
-    timeout: '100'
-  states:
-    bus_sink: false
-    bus_source: false
-    bus_structure: null
-    coordinate: [1688, 1232.0]
-    rotation: 0
-    state: enabled
 - name: zeromq_push_sink_0
   id: zeromq_push_sink
   parameters:
@@ -2020,7 +2047,6 @@ connections:
 - [blocks_multiply_const_vxx_0_1, '0', virtual_sink_1_0_0, '0']
 - [blocks_multiply_xx_0, '0', digital_header_payload_demux_0, '0']
 - [chan_taps_logger_0, '0', digital_ofdm_frame_equalizer_vcvc_0, '0']
-- [chan_taps_logger_0, snr_part, zeromq_push_msg_sink_1, in]
 - [digital_constellation_decoder_cb_0, '0', digital_packet_headerparser_b_0_0, '0']
 - [digital_header_payload_demux_0, '0', virtual_sink_0_1, '0']
 - [digital_header_payload_demux_0, '1', virtual_sink_1, '0']
@@ -2047,8 +2073,6 @@ connections:
 - [fft_vxx_1, '0', raw_noise_logger_0, '0']
 - [pdu_tagged_stream_to_pdu_0, pdus, zeromq_pub_msg_sink_0, in]
 - [pdu_tagged_stream_to_pdu_0, pdus, zeromq_push_msg_sink_0, in]
-- [pilot_snr_logger_0, snr_part, zeromq_push_msg_sink_1, in]
-- [raw_noise_logger_0, snr_part, zeromq_push_msg_sink_1, in]
 - [uhd_usrp_source_0_0, '0', blocks_delay_0, '0']
 - [uhd_usrp_source_0_0, '0', digital_ofdm_sync_sc_cfb_0, '0']
 - [uhd_usrp_source_0_0, '0', qtgui_freq_sink_x_0_RX, '0']

@@ -3,12 +3,14 @@
 import threading
 import numpy as np
 import pmt
+import zmq
 from gnuradio import gr
 
 
 class blk(gr.sync_block):
     def __init__(self, fft_len=64, packet_len=960,
-                 out_path='/tmp/h_dataset.npz', flush_every=200):
+                 out_path='/tmp/h_dataset.npz',
+                 snr_addr='tcp://127.0.0.1:5560', flush_every=200):
         gr.sync_block.__init__(
             self,
             name='chan_taps_logger',
@@ -31,8 +33,9 @@ class blk(gr.sync_block):
         self.msg_port = pmt.intern('header_valid')
         self.message_port_register_in(self.msg_port)
         self.set_msg_handler(self.msg_port, self._on_header_valid)
-        self.snr_part_port = pmt.intern('snr_part')
-        self.message_port_register_out(self.snr_part_port)
+        self.snr_addr = str(snr_addr)
+        self._ctx = None
+        self._sock = None
 
     def _extract_int(self, msg, key):
         sentinel = pmt.from_long(-(1 << 30))
@@ -70,7 +73,7 @@ class blk(gr.sync_block):
         meta = pmt.dict_add(meta, pmt.intern('packet_num'), pmt.from_long(int(pn)))
         meta = pmt.dict_add(meta, pmt.intern('kind'), pmt.intern('h'))
         payload = pmt.init_c32vector(self.fft_len, h_finalized.tolist())
-        self.message_port_pub(self.snr_part_port, pmt.cons(meta, payload))
+        self._send_nb(pmt.cons(meta, payload))
 
     def _flush(self):
         if not self.pn_list:
@@ -92,9 +95,31 @@ class blk(gr.sync_block):
                     self.pending = self.pending[-self.max_pending:]
         return n
 
+    def start(self):
+        self._ctx = zmq.Context.instance()
+        self._sock = self._ctx.socket(zmq.PUSH)
+        self._sock.setsockopt(zmq.LINGER, 0)
+        self._sock.setsockopt(zmq.SNDHWM, 1000)
+        self._sock.connect(self.snr_addr)
+        return True
+
+    def _send_nb(self, pdu):
+        s = self._sock
+        if s is None:
+            return
+        try:
+            s.send(pmt.serialize_str(pdu), flags=zmq.NOBLOCK)
+        except (zmq.Again, zmq.ZMQError):
+            pass
+
     def stop(self):
         with self._lock:
             self._flush()
         print('[chan_taps_logger] committed=%d rejected=%d -> %s'
               % (len(self.pn_list), self.n_rejected, self.out_path))
+        if self._sock is not None:
+            try:
+                self._sock.close(0)
+            except Exception:
+                pass
         return True

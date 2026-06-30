@@ -41,7 +41,7 @@ N_PACKETS = 20
 EXPECTED_FRAME_LEN = math.ceil(PACKET_LEN / N_OCC)   # 20
 
 
-def make_formatter(num_bits=24, expected_number_packets=0):
+def make_formatter(num_bits=24, expected_number_packets=0, use_fec=False):
     """A fresh robust-header formatter (the generator mutates its counter)."""
     return deepjscc.packet_header_ofdm_robust(
         OCCUPIED_CARRIERS,
@@ -55,34 +55,36 @@ def make_formatter(num_bits=24, expected_number_packets=0):
         expected_packet_len=PACKET_LEN,
         num_bits=num_bits,
         expected_number_packets=expected_number_packets,
+        use_fec=use_fec,
     )
 
 
-class flip_bit(gr.sync_block):
-    """Flip header bit index `pos` within every `period`-byte header block."""
+class flip_bits(gr.sync_block):
+    """Flip the header bit indices in `positions` within every `period`-byte block."""
 
-    def __init__(self, period=N_OCC, pos=0):
+    def __init__(self, period, positions):
         gr.sync_block.__init__(
-            self, name="flip_bit",
+            self, name="flip_bits",
             in_sig=[np.uint8], out_sig=[np.uint8])
         self.period = int(period)
-        self.pos = int(pos)
+        self.positions = [int(p) for p in positions]
 
     def work(self, input_items, output_items):
         out = output_items[0]
         out[:] = input_items[0]
         start = self.nitems_read(0)
         n = len(out)
-        # Indices (absolute) where (offset % period) == pos.
-        first = (self.pos - (start % self.period)) % self.period
-        idx = np.arange(first, n, self.period)
-        out[idx] ^= 1
+        for pos in self.positions:
+            # Indices (absolute) where (offset % period) == pos.
+            first = (pos - (start % self.period)) % self.period
+            out[np.arange(first, n, self.period)] ^= 1
         return n
 
 
-def run_roundtrip(corrupt, num_bits=24, n_packets=N_PACKETS,
-                  expected_number_packets=0):
-    """Generate n_packets headers, optionally corrupt one bit each, parse them.
+def run_roundtrip(flip_positions=(), num_bits=24, n_packets=N_PACKETS,
+                  expected_number_packets=0, use_fec=False):
+    """Generate n_packets headers, flip the given header-bit positions on each,
+    and parse them.
 
     Returns the list of parsed PMT messages from the header parser.
     """
@@ -93,14 +95,14 @@ def run_roundtrip(corrupt, num_bits=24, n_packets=N_PACKETS,
     s2ts = blocks.stream_to_tagged_stream(
         gr.sizeof_char, 1, PACKET_LEN, "packet_len")
     hdrgen = digital.packet_headergenerator_bb(
-        make_formatter(num_bits, expected_number_packets), "packet_len")
-    parser_fmt = make_formatter(num_bits, expected_number_packets)  # keep alive
+        make_formatter(num_bits, expected_number_packets, use_fec), "packet_len")
+    parser_fmt = make_formatter(num_bits, expected_number_packets, use_fec)
     parser = digital.packet_headerparser_b(parser_fmt.base())
     sink = blocks.message_debug()
 
     tb.connect(src, s2ts, hdrgen)
-    if corrupt:
-        flip = flip_bit(period=N_OCC, pos=0)
+    if flip_positions:
+        flip = flip_bits(period=N_OCC, positions=flip_positions)
         tb.connect(hdrgen, flip, parser)
     else:
         tb.connect(hdrgen, parser)
@@ -128,7 +130,7 @@ def check_roundtrip(num_bits):
     """Clean round-trip + 1-bit-corruption rejection for a given num_bits."""
     ok = True
     print(f"== num_bits={num_bits}: clean round-trip ==")
-    msgs = run_roundtrip(corrupt=False, num_bits=num_bits)
+    msgs = run_roundtrip(flip_positions=(), num_bits=num_bits)
     parsed = [parse_msg(m) for m in msgs]
     valid = [p for p in parsed if p is not None]
     print(f"  generated={N_PACKETS}  parsed_ok={len(valid)}  "
@@ -148,7 +150,7 @@ def check_roundtrip(num_bits):
                   f"packet_num=0..{N_PACKETS-1}, frame_len={EXPECTED_FRAME_LEN}")
 
     print(f"== num_bits={num_bits}: 1-bit corruption rejection ==")
-    msgs = run_roundtrip(corrupt=True, num_bits=num_bits)
+    msgs = run_roundtrip(flip_positions=[0], num_bits=num_bits)
     parsed = [parse_msg(m) for m in msgs]
     valid = [p for p in parsed if p is not None]
     print(f"  corrupted={N_PACKETS}  parsed_ok={len(valid)}  "
@@ -166,7 +168,7 @@ def check_wrap(num_bits=8):
     period = 2 ** num_bits
     n = period + 32                 # force at least one wrap past 2**num_bits
     print(f"== num_bits={num_bits}: counter wrap (mod {period}) ==")
-    msgs = run_roundtrip(corrupt=False, num_bits=num_bits, n_packets=n)
+    msgs = run_roundtrip(flip_positions=(), num_bits=num_bits, n_packets=n)
     valid = [p for p in (parse_msg(m) for m in msgs) if p is not None]
     ok = len(valid) == n
     if not ok:
@@ -186,7 +188,7 @@ def check_expected_number(n_expected=205):
     n = n_expected + 32           # force a wrap past N
     auto_bits = max(1, (n_expected - 1).bit_length())
     print(f"== expected_number_packets={n_expected}: auto field + mod-N wrap ==")
-    msgs = run_roundtrip(corrupt=False, n_packets=n,
+    msgs = run_roundtrip(flip_positions=(), n_packets=n,
                          expected_number_packets=n_expected)
     valid = [p for p in (parse_msg(m) for m in msgs) if p is not None]
     ok = len(valid) == n
@@ -203,6 +205,43 @@ def check_expected_number(n_expected=205):
     return ok
 
 
+def check_fec(num_bits=16):
+    """Golay(24,12) FEC: corrects up to 3 errors per 24-bit codeword (2 words
+    fill the 48-carrier header), rejects 4-error codewords."""
+    ok = True
+    # info = num_bits pn + 8 CRC -> 2 Golay words; word0 = bits[0..23],
+    # word1 = bits[24..47]. Flips below target specific codewords.
+    cases = [
+        ("clean",                 (),               N_PACKETS),
+        ("3 errors in word0",     [0, 1, 2],        N_PACKETS),
+        ("3 errors in each word", [0, 1, 2, 24, 25, 26], N_PACKETS),
+    ]
+    for label, flips, want_ok in cases:
+        print(f"== use_fec num_bits={num_bits}: {label} ==")
+        msgs = run_roundtrip(flip_positions=flips, num_bits=num_bits, use_fec=True)
+        valid = [p for p in (parse_msg(m) for m in msgs) if p is not None]
+        good = len(valid) == want_ok and all(
+            plen == PACKET_LEN and pnum == i and flen == EXPECTED_FRAME_LEN
+            for i, (plen, pnum, flen) in enumerate(valid))
+        if good:
+            print(f"  PASS: {len(valid)}/{N_PACKETS} corrected, packet_num intact")
+        else:
+            ok = False
+            print(f"  FAIL: {len(valid)}/{N_PACKETS} valid (expected {want_ok} "
+                  f"with correct fields)")
+
+    # 4 errors in one codeword exceed Golay's t=3 -> must be rejected.
+    print(f"== use_fec num_bits={num_bits}: 4 errors in word0 (reject) ==")
+    msgs = run_roundtrip(flip_positions=[0, 1, 2, 3], num_bits=num_bits, use_fec=True)
+    valid = [p for p in (parse_msg(m) for m in msgs) if p is not None]
+    if len(valid) == 0:
+        print("  PASS: all 4-error codewords rejected (uncorrectable)")
+    else:
+        ok = False
+        print(f"  FAIL: {len(valid)} headers with 4 errors were accepted")
+    return ok
+
+
 def main():
     ok = True
     # num_bits=24 keeps the default/backward-compatible behavior; num_bits=8 is
@@ -212,6 +251,8 @@ def main():
     ok &= check_wrap(8)
     # Preferred path: derive the field from the expected packet count (205).
     ok &= check_expected_number(205)
+    # Golay(24,12) FEC: corrects up to 3 errors per codeword.
+    ok &= check_fec(16)
 
     print("\nRESULT:", "PASS" if ok else "FAIL")
     return 0 if ok else 1

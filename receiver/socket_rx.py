@@ -371,8 +371,11 @@ def main() -> int:
     if args.use_live_snr:
         snr_socket = ctx.socket(zmq.PULL)
         snr_socket.setsockopt(zmq.RCVHWM, 5000)
-        snr_socket.connect(f"tcp://{args.connect_host}:{args.snr_port}")
-        print(f"[*] live-SNR PULL connected to :{args.snr_port}")
+        # The flowgraph's per-frame SNR loggers each own a non-blocking PUSH
+        # socket that *connects* here, so this PULL must bind (fan-in). A missing
+        # consumer can no longer wedge flowgraph shutdown.
+        snr_socket.bind(f"tcp://*:{args.snr_port}")
+        print(f"[*] live-SNR PULL bound to :{args.snr_port}")
 
     try:
         receive_loop(codec, socket, snr_socket, args)

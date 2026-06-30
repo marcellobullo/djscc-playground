@@ -31,5 +31,6 @@ void bind_packet_header_ofdm_robust(py::module& m)
              py::arg("scramble_header") = false,
              py::arg("expected_packet_len") = -1,
              py::arg("num_bits") = 24,
-             py::arg("expected_number_packets") = 0);
+             py::arg("expected_number_packets") = 0,
+             py::arg("use_fec") = false);
 }

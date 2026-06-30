@@ -1,10 +1,11 @@
 import threading
 import numpy as np
 import pmt
+import zmq
 from gnuradio import gr
 
 class blk(gr.sync_block):
-    def __init__(self, fft_len=64, null_positions=[0, 1, 2, 3, 4, 5, 59, 60, 61, 62, 63], out_path='/tmp/raw_noise_dataset.npz', flush_every=200):
+    def __init__(self, fft_len=64, null_positions=[0, 1, 2, 3, 4, 5, 59, 60, 61, 62, 63], out_path='/tmp/raw_noise_dataset.npz', snr_addr='tcp://127.0.0.1:5560', flush_every=200):
         gr.sync_block.__init__(self, name='raw_noise_logger', in_sig=[(np.complex64, fft_len)], out_sig=None)
         self.fft_len = int(fft_len)
         self.null_positions = np.array(null_positions, dtype=np.int64)
@@ -19,8 +20,9 @@ class blk(gr.sync_block):
         self.pn_list = []
         self.sigma2_list = []
         self._lock = threading.Lock()
-        self.snr_part_port = pmt.intern('snr_part')
-        self.message_port_register_out(self.snr_part_port)
+        self.snr_addr = str(snr_addr)
+        self._ctx = None
+        self._sock = None
 
     def work(self, input_items, output_items):
         in0 = input_items[0]
@@ -66,7 +68,7 @@ class blk(gr.sync_block):
         meta = pmt.dict_add(meta, pmt.intern('packet_num'), pmt.from_long(pn_finalized))
         meta = pmt.dict_add(meta, pmt.intern('kind'), pmt.intern('raw'))
         meta = pmt.dict_add(meta, pmt.intern('sigma2'), pmt.from_double(avg_sigma2))
-        self.message_port_pub(self.snr_part_port, pmt.cons(meta, pmt.PMT_NIL))
+        self._send_nb(pmt.cons(meta, pmt.PMT_NIL))
         self._curr_pn = None
         self._curr_noise_pwrs = []
         self._curr_consumed = 0
@@ -77,8 +79,30 @@ class blk(gr.sync_block):
             return
         np.savez(self.out_path, packet_num=np.array(self.pn_list, dtype=np.int64), sigma2=np.array(self.sigma2_list, dtype=np.float32))
 
+    def start(self):
+        self._ctx = zmq.Context.instance()
+        self._sock = self._ctx.socket(zmq.PUSH)
+        self._sock.setsockopt(zmq.LINGER, 0)
+        self._sock.setsockopt(zmq.SNDHWM, 1000)
+        self._sock.connect(self.snr_addr)
+        return True
+
+    def _send_nb(self, pdu):
+        s = self._sock
+        if s is None:
+            return
+        try:
+            s.send(pmt.serialize_str(pdu), flags=zmq.NOBLOCK)
+        except (zmq.Again, zmq.ZMQError):
+            pass
+
     def stop(self):
         with self._lock:
             self._flush()
         print('[raw_noise_logger] saved %d frames -> %s' % (len(self.pn_list), self.out_path))
+        if self._sock is not None:
+            try:
+                self._sock.close(0)
+            except Exception:
+                pass
         return True

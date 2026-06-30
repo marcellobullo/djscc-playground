@@ -64,6 +64,16 @@ namespace deepjscc {
  * Because the length is not transmitted, expected_packet_len MUST be set
  * (>= 0) on the parsing (receive) side; otherwise header_parser rejects every
  * header.
+ *
+ * use_fec adds forward error correction on top of the above. The
+ * (packet_num + 8-bit CRC) info word is encoded with the extended binary
+ * Golay(24,12,8) code in 12-bit chunks, one BPSK bit per subcarrier. Each
+ * codeword corrects any 3 bit errors and detects 4; the CRC and the
+ * packet_num >= N range check then validate the corrected word (catching the
+ * rare >3-error miscorrection). FEC currently requires bits_per_header_sym == 1
+ * (BPSK header) and enough header room for ceil((num_bits+8)/12) 24-bit
+ * codewords, i.e. with a 48-bit header symbol num_bits <= 16. Both ends must
+ * use the same use_fec / num_bits / expected_number_packets settings.
  */
 class DEEPJSCC_API packet_header_ofdm_robust : public gr::digital::packet_header_ofdm {
 public:
@@ -79,7 +89,8 @@ public:
                               bool scramble_header,
                               int expected_packet_len,
                               int num_bits,
-                              int expected_number_packets);
+                              int expected_number_packets,
+                              bool use_fec);
     ~packet_header_ofdm_robust() override;
 
     bool header_formatter(long packet_len,
@@ -98,7 +109,8 @@ public:
                      bool scramble_header = false,
                      int expected_packet_len = -1,
                      int num_bits = 24,
-                     int expected_number_packets = 0);
+                     int expected_number_packets = 0,
+                     bool use_fec = false);
 
 private:
     uint32_t d_packet_number_robust;
@@ -107,6 +119,7 @@ private:
     uint32_t d_num_mask;
     int d_expected_number_packets;   // <= 0 disables modulo + range guard
     uint32_t d_counter_modulus;      // wrap point: N (if >0) else 2^num_bits
+    bool d_use_fec;                  // extended Golay(24,12) on packet_num+CRC
     bool d_warned_no_expected_len;
 };
 
