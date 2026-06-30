@@ -72,6 +72,19 @@ blocks:
     coordinate: [0, 352.0]
     rotation: 0
     state: enabled
+- name: header_formatter_rx
+  id: variable
+  parameters:
+    comment: ''
+    value: digital.packet_header_ofdm(occupied_carriers, n_syms=1, len_tag_key="packet_len",   frame_len_tag_key="frame_len",
+      bits_per_header_sym=header_mod.bits_per_symbol(), bits_per_payload_sym=8, scramble_header=True)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [0, 416.0]
+    rotation: 0
+    state: disabled
 - name: header_mod
   id: variable
   parameters:
@@ -94,7 +107,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [344, 296.0]
+    coordinate: [352, 296.0]
     rotation: 0
     state: enabled
 - name: packet_len
@@ -169,16 +182,75 @@ blocks:
     coordinate: [112, 0.0]
     rotation: 0
     state: enabled
+- name: sw_multiplier
+  id: variable
+  parameters:
+    comment: ''
+    value: '3'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [112, 240.0]
+    rotation: 0
+    state: enabled
+- name: sw_multiplier
+  id: variable_qtgui_range
+  parameters:
+    comment: 'Mini-Mini: 40
+
+      USRP-Mini: 25'
+    gui_hint: ''
+    label: '"Sync Words Boost"'
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: int
+    start: '1'
+    step: '1'
+    stop: '10'
+    value: '5'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [384, 28.0]
+    rotation: 0
+    state: disabled
+- name: sync_threshold
+  id: variable_qtgui_range
+  parameters:
+    comment: 'Mini-Mini: 40
+
+      USRP-Mini: 25'
+    gui_hint: ''
+    label: '"sync_threshold"'
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: int
+    start: '0'
+    step: '1'
+    stop: '100'
+    value: '90'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [184, 0.0]
+    rotation: 0
+    state: enabled
 - name: sync_word1
   id: variable
   parameters:
     comment: ''
-    value: '[0., 0., 0., 0., 0., 0., 0., 1.41421356, 0., -1.41421356, 0., 1.41421356,
-      0., -1.41421356, 0., -1.41421356, 0., -1.41421356, 0., 1.41421356, 0., -1.41421356,
-      0., 1.41421356, 0., -1.41421356, 0., -1.41421356, 0., -1.41421356, 0., -1.41421356,
+    value: sw_multiplier*np.array([0., 0., 0., 0., 0., 0., 0., 1.41421356, 0., -1.41421356,
+      0., 1.41421356, 0., -1.41421356, 0., -1.41421356, 0., -1.41421356, 0., 1.41421356,
+      0., -1.41421356, 0., 1.41421356, 0., -1.41421356, 0., -1.41421356, 0., -1.41421356,
+      0., -1.41421356, 0., 1.41421356, 0., -1.41421356, 0., 1.41421356, 0., 1.41421356,
       0., 1.41421356, 0., -1.41421356, 0., 1.41421356, 0., 1.41421356, 0., 1.41421356,
-      0., -1.41421356, 0., 1.41421356, 0., 1.41421356, 0., 1.41421356, 0., -1.41421356,
-      0., 1.41421356, 0., 1.41421356, 0., 1.41421356, 0., 0., 0., 0., 0., 0.]'
+      0., -1.41421356, 0., 1.41421356, 0., 1.41421356, 0., 1.41421356, 0., 0., 0.,
+      0., 0., 0.])
   states:
     bus_sink: false
     bus_source: false
@@ -190,9 +262,10 @@ blocks:
   id: variable
   parameters:
     comment: ''
-    value: '[0, 0, 0, 0, 0, 0, -1, -1, -1, -1, 1, 1, -1, -1, -1, 1, -1, 1, 1, 1, 1,
-      1, -1, -1, -1, -1, -1, 1, -1, -1, 1, -1, 0, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1,
-      1, 1, 1, 1, -1, 1, -1, -1, -1, 1, -1, 1, -1, -1, -1, -1, 0, 0, 0, 0, 0] '
+    value: sw_multiplier*np.array([0, 0, 0, 0, 0, 0, -1, -1, -1, -1, 1, 1, -1, -1,
+      -1, 1, -1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1, 1, -1, -1, 1, -1, 0, 1, -1, 1,
+      1, 1, -1, 1, 1, 1, -1, 1, 1, 1, 1, -1, 1, -1, -1, -1, 1, -1, 1, -1, -1, -1,
+      -1, 0, 0, 0, 0, 0])
   states:
     bus_sink: false
     bus_source: false
@@ -266,6 +339,21 @@ blocks:
     bus_source: false
     bus_structure: null
     coordinate: [2016, 636.0]
+    rotation: 0
+    state: disabled
+- name: blocks_message_debug_hdr
+  id: blocks_message_debug
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: 'prints each header parse result (dict if valid, #f if invalid)'
+    en_uvec: 'False'
+    log_level: info
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [2272, 556.0]
     rotation: 0
     state: disabled
 - name: blocks_multiply_const_vxx_0_1
@@ -401,7 +489,7 @@ blocks:
     label: 'Device IP address '
     short_id: ''
     type: str
-    value: '"192.168.1.68"'
+    value: '"192.168.1.67"'
   states:
     bus_sink: false
     bus_source: false
@@ -459,7 +547,7 @@ blocks:
     affinity: ''
     alias: ''
     comment: ''
-    eq_noise_red_len: '0'
+    eq_noise_red_len: int(fft_len/4)
     force_one_symbol: 'False'
     max_carr_offset: '3'
     maxoutbuf: '0'
@@ -570,7 +658,7 @@ blocks:
     fft_len: fft_len
     maxoutbuf: '0'
     minoutbuf: '0'
-    threshold: '0.9'
+    threshold: sync_threshold/100
     use_even_carriers: 'False'
   states:
     bus_sink: false
@@ -666,6 +754,19 @@ blocks:
     bus_source: false
     bus_structure: null
     coordinate: [0, 80.0]
+    rotation: 0
+    state: enabled
+- name: import_deepjscc_0
+  id: import
+  parameters:
+    alias: ''
+    comment: ''
+    imports: import numpy as np
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [280, 56.0]
     rotation: 0
     state: enabled
 - name: pdu_tagged_stream_to_pdu_0
@@ -830,7 +931,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1136, 1080.0]
+    coordinate: [1136, 1104.0]
     rotation: 0
     state: enabled
 - name: qtgui_const_sink_x_0
@@ -1035,7 +1136,7 @@ blocks:
     autoscale: 'False'
     average: '1.0'
     axislabels: 'True'
-    bw: samp_rate
+    bw: 5e6
     color1: '"blue"'
     color10: '"dark blue"'
     color2: '"red"'
@@ -1935,6 +2036,7 @@ connections:
 - [digital_ofdm_serializer_vcc_payload, '0', blocks_multiply_const_vxx_0_1, '0']
 - [digital_ofdm_sync_sc_cfb_0, '0', analog_frequency_modulator_fc_0, '0']
 - [digital_ofdm_sync_sc_cfb_0, '1', digital_header_payload_demux_0, '1']
+- [digital_packet_headerparser_b_0_0, header_data, blocks_message_debug_hdr, print]
 - [digital_packet_headerparser_b_0_0, header_data, chan_taps_logger_0, header_valid]
 - [digital_packet_headerparser_b_0_0, header_data, digital_header_payload_demux_0,
   header_data]

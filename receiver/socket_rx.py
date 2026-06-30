@@ -194,8 +194,11 @@ def receive_loop(codec, socket, snr_socket, args):
         dup = last_saved is not None and _ncc(frame, last_saved) > args.duplicate_threshold
         if not dup:
             unique += 1
-            stamp = time.strftime("%Y%m%d_%H%M%S")
-            fn = f"image_{unique:03d}_{stamp}.png"
+            if args.no_timestamp:
+                fn = f"{args.name_prefix}_{unique:03d}.png"
+            else:
+                stamp = time.strftime("%Y%m%d_%H%M%S")
+                fn = f"{args.name_prefix}_{unique:03d}_{stamp}.png"
             if args.save:
                 cv2.imwrite(os.path.join(args.output_dir, fn), frame)
             last_saved = frame.copy()
@@ -320,6 +323,11 @@ def parse_args():
     p.add_argument("--snr-port", default="5560")
 
     p.add_argument("--output-dir", default="./received_images")
+    p.add_argument("--name-prefix", default="image",
+                   help="filename prefix for saved images (default: image -> "
+                        "image_001_<stamp>.png)")
+    p.add_argument("--no-timestamp", action="store_true",
+                   help="drop the timestamp -> <prefix>_001.png (clean sequential names)")
     p.add_argument("--no-save", action="store_true")
     p.add_argument("--count", type=int, default=0)
     p.add_argument("--duplicate-threshold", type=float, default=0.92)
