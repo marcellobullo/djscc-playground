@@ -45,6 +45,18 @@ blocks:
     coordinate: [0, 240.0]
     rotation: 0
     state: enabled
+- name: header_boost
+  id: variable
+  parameters:
+    comment: ''
+    value: '2'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [448, 352.0]
+    rotation: 0
+    state: enabled
 - name: header_equalizer
   id: variable
   parameters:
@@ -246,7 +258,7 @@ blocks:
     start: '0'
     step: '1'
     stop: '100'
-    value: '90'
+    value: '65'
     widget: counter_slider
   states:
     bus_sink: false
@@ -377,7 +389,7 @@ blocks:
     affinity: ''
     alias: ''
     comment: ''
-    const: '1'
+    const: header_boost
     maxoutbuf: '0'
     minoutbuf: '0'
     type: complex
@@ -502,7 +514,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1120, 524.0]
+    coordinate: [1120, 520.0]
     rotation: 0
     state: enabled
 - name: device_address
@@ -535,7 +547,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1696, 524.0]
+    coordinate: [1696, 540.0]
     rotation: 0
     state: enabled
 - name: digital_header_payload_demux_0
@@ -605,7 +617,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1320, 500.0]
+    coordinate: [1320, 516.0]
     rotation: 0
     state: enabled
 - name: digital_ofdm_frame_equalizer_vcvc_1
@@ -648,7 +660,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1496, 516.0]
+    coordinate: [1496, 532.0]
     rotation: 0
     state: enabled
 - name: digital_ofdm_serializer_vcc_payload
@@ -705,7 +717,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1864, 524.0]
+    coordinate: [1864, 540.0]
     rotation: 0
     state: enabled
 - name: digital_probe_mpsk_snr_est_c_0

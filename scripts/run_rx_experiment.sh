@@ -28,6 +28,7 @@
 #   --count N         stop after N unique images (default: 0 = run until Ctrl-C)
 #   --model NAME      HF id / alias / .pth for the decoder
 #                       (default: marcellobullo/djscc-convnext-cr6-ofdm-spatialcsi)
+#   --aligner NAME    use the named aligner    (default: none / disabled)
 #   --no-interleave   disable de-interleaving (default: ON, must match TX)
 #   --launch-fg       compile + run djscc_rx.grc in conda env `demo` for this run
 #   --keep-timestamp  keep the timestamp in filenames (default: clean sequential)
@@ -43,6 +44,7 @@ MODEL="marcellobullo/djscc-convnext-cr6-ofdm-spatialcsi"
 RESULTS="$ROOT/results"
 PREFIX=""
 COUNT=0
+ALIGNER=""           # empty = no aligner
 INTERLEAVE=1
 LAUNCH_FG=0
 TIMESTAMP=0          # 0 = clean sequential names (--no-timestamp on RX)
@@ -59,6 +61,7 @@ while [[ $# -gt 0 ]]; do
     --prefix)         PREFIX="$2";  shift 2 ;;
     --count)          COUNT="$2";   shift 2 ;;
     --model)          MODEL="$2";   shift 2 ;;
+    --aligner)        ALIGNER="$2"; shift 2 ;;
     --no-interleave)  INTERLEAVE=0; shift ;;
     --launch-fg)      LAUNCH_FG=1;  shift ;;
     --keep-timestamp) TIMESTAMP=1;  shift ;;
@@ -119,6 +122,7 @@ echo "  SNR point   : ${SNR} dB"
 echo "  output dir  : $OUTDIR"
 echo "  name prefix : ${PREFIX}  ->  ${PREFIX}_001$([[ $TIMESTAMP -eq 1 ]] && echo '_<stamp>').png"
 echo "  model       : $MODEL"
+echo "  aligner     : ${ALIGNER:-none}"
 echo "  interleave  : $([[ $INTERLEAVE -eq 1 ]] && echo on || echo off)"
 echo "  stop after  : $([[ $COUNT -gt 0 ]] && echo "${COUNT} images" || echo 'Ctrl-C / idle timeout')"
 echo "  flowgraph   : $([[ $LAUNCH_FG -eq 1 ]] && echo 'launched by script' || echo 'assumed running')"
@@ -134,6 +138,7 @@ RX_ARGS=(
   --name-prefix "$PREFIX"
   --count "$COUNT"
 )
+[[ -n "$ALIGNER" ]]       && RX_ARGS+=(--aligner "$ALIGNER")
 [[ "$INTERLEAVE" -eq 1 ]] && RX_ARGS+=(--interleave)
 [[ "$TIMESTAMP" -eq 0 ]] && RX_ARGS+=(--no-timestamp)
 [[ ${#EXTRA[@]} -gt 0 ]] && RX_ARGS+=("${EXTRA[@]}")
