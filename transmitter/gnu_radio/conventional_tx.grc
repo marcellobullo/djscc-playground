@@ -73,6 +73,57 @@ blocks:
     coordinate: [0, 248.0]
     rotation: 0
     state: enabled
+- name: header_boost
+  id: variable_qtgui_range
+  parameters:
+    comment: 'Mini-Mini: 35
+
+      USRP-Mini: 0'
+    gui_hint: ''
+    label: '"Header Boost"'
+    min_len: '200'
+    orient: QtCore.Qt.Horizontal
+    rangeType: float
+    start: '1'
+    step: '1'
+    stop: '10'
+    value: '2'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [192, 44.0]
+    rotation: 0
+    state: enabled
+- name: header_formatter_tx_robust
+  id: variable
+  parameters:
+    comment: ''
+    value: deepjscc.packet_header_ofdm_robust(occupied_carriers, n_syms=1, len_tag_key="packet_len",   frame_len_tag_key=length_tag_key,
+      num_tag_key="packet_num", bits_per_header_sym=header_mod.bits_per_symbol(),
+      bits_per_payload_sym=8, scramble_header=True, num_bits=16,use_fec=True)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [112, 416.0]
+    rotation: 0
+    state: enabled
+- name: header_formatter_tx_wide
+  id: variable
+  parameters:
+    comment: ''
+    value: deepjscc.packet_header_ofdm_wide(occupied_carriers, n_syms=1, len_tag_key="packet_len",   frame_len_tag_key=length_tag_key,
+      num_tag_key="packet_num", bits_per_header_sym=header_mod.bits_per_symbol(),
+      bits_per_payload_sym=8, scramble_header=True)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [0, 416.0]
+    rotation: 0
+    state: enabled
 - name: header_mod
   id: variable
   parameters:
@@ -125,7 +176,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [240, 248.0]
+    coordinate: [248, 248.0]
     rotation: 0
     state: enabled
 - name: packet_len
@@ -174,7 +225,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [336, 248.0]
+    coordinate: [360, 248.0]
     rotation: 0
     state: enabled
 - name: pilot_symbols
@@ -186,7 +237,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [416, 248.0]
+    coordinate: [440, 248.0]
     rotation: 0
     state: enabled
 - name: samp_rate
@@ -201,18 +252,31 @@ blocks:
     coordinate: [424, 96.0]
     rotation: 0
     state: disabled
+- name: sw_multiplier
+  id: variable
+  parameters:
+    comment: ''
+    value: '4'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [240, 192.0]
+    rotation: 0
+    state: enabled
 - name: sync_word1
   id: variable
   parameters:
     comment: '64 samples
 
       Starts/Ends with 6 0s'
-    value: '[0., 0., 0., 0., 0., 0., 0., 1.41421356, 0., -1.41421356, 0., 1.41421356,
-      0., -1.41421356, 0., -1.41421356, 0., -1.41421356, 0., 1.41421356, 0., -1.41421356,
-      0., 1.41421356, 0., -1.41421356, 0., -1.41421356, 0., -1.41421356, 0., -1.41421356,
+    value: sw_multiplier*np.array([0., 0., 0., 0., 0., 0., 0., 1.41421356, 0., -1.41421356,
+      0., 1.41421356, 0., -1.41421356, 0., -1.41421356, 0., -1.41421356, 0., 1.41421356,
+      0., -1.41421356, 0., 1.41421356, 0., -1.41421356, 0., -1.41421356, 0., -1.41421356,
+      0., -1.41421356, 0., 1.41421356, 0., -1.41421356, 0., 1.41421356, 0., 1.41421356,
       0., 1.41421356, 0., -1.41421356, 0., 1.41421356, 0., 1.41421356, 0., 1.41421356,
-      0., -1.41421356, 0., 1.41421356, 0., 1.41421356, 0., 1.41421356, 0., -1.41421356,
-      0., 1.41421356, 0., 1.41421356, 0., 1.41421356, 0., 0., 0., 0., 0., 0.]'
+      0., -1.41421356, 0., 1.41421356, 0., 1.41421356, 0., 1.41421356, 0., 0., 0.,
+      0., 0., 0.])
   states:
     bus_sink: false
     bus_source: false
@@ -226,9 +290,10 @@ blocks:
     comment: '64 samples
 
       Ends with 5 0s'
-    value: '[0, 0, 0, 0, 0, 0, -1, -1, -1, -1, 1, 1, -1, -1, -1, 1, -1, 1, 1, 1, 1,
-      1, -1, -1, -1, -1, -1, 1, -1, -1, 1, -1, 0, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1,
-      1, 1, 1, 1, -1, 1, -1, -1, -1, 1, -1, 1, -1, -1, -1, -1, 0, 0, 0, 0, 0] '
+    value: sw_multiplier*np.array([0, 0, 0, 0, 0, 0, -1, -1, -1, -1, 1, 1, -1, -1,
+      -1, 1, -1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1, 1, -1, -1, 1, -1, 0, 1, -1, 1,
+      1, 1, -1, 1, 1, 1, -1, 1, 1, 1, 1, -1, 1, -1, -1, -1, 1, -1, 1, -1, -1, -1,
+      -1, 0, 0, 0, 0, 0])
   states:
     bus_sink: false
     bus_source: false
@@ -328,6 +393,24 @@ blocks:
     coordinate: [1032, 1220.0]
     rotation: 0
     state: enabled
+- name: blocks_multiply_const_vxx_1
+  id: blocks_multiply_const_vxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    const: header_boost
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [584, 956.0]
+    rotation: 0
+    state: enabled
 - name: blocks_repack_bits_bb_0
   id: blocks_repack_bits_bb
   parameters:
@@ -403,7 +486,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [616, 1004.0]
+    coordinate: [752, 1004.0]
     rotation: 0
     state: enabled
 - name: carrier_freq
@@ -535,10 +618,7 @@ blocks:
     affinity: ''
     alias: ''
     comment: 'Samples: 48'
-    header_formatter: deepjscc.packet_header_ofdm_wide(occupied_carriers, n_syms=1,
-      len_tag_key="packet_len",   frame_len_tag_key=length_tag_key, num_tag_key="packet_num",
-      bits_per_header_sym=header_mod.bits_per_symbol(), bits_per_payload_sym=8, scramble_header=True,
-      expected_packet_len=packet_len)
+    header_formatter: header_formatter_tx_robust
     len_tag_key: '"packet_len"'
     maxoutbuf: '0'
     minoutbuf: '0'
@@ -609,6 +689,19 @@ blocks:
     coordinate: [72, 96.0]
     rotation: 0
     state: enabled
+- name: import_deepjscc_0_0
+  id: import
+  parameters:
+    alias: ''
+    comment: ''
+    imports: import numpy as np
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [144, 96.0]
+    rotation: 0
+    state: enabled
 - name: mod_order
   id: parameter
   parameters:
@@ -618,7 +711,7 @@ blocks:
     label: Bits Per Modulation Symbol
     short_id: ''
     type: intx
-    value: '2'
+    value: '1'
   states:
     bus_sink: false
     bus_source: false
@@ -1290,7 +1383,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [816, 1020.0]
+    coordinate: [936, 1020.0]
     rotation: 0
     state: enabled
 - name: virtual_sink_0_0_1
@@ -1390,13 +1483,14 @@ connections:
 - [blocks_multiply_const_vxx_0, '0', qtgui_time_sink_x_0_1_1, '0']
 - [blocks_multiply_const_vxx_0, '0', qtgui_waterfall_sink_x_0, '0']
 - [blocks_multiply_const_vxx_0, '0', uhd_usrp_sink_0, '0']
+- [blocks_multiply_const_vxx_1, '0', blocks_tagged_stream_mux_0, '0']
 - [blocks_repack_bits_bb_0, '0', digital_chunks_to_symbols_xx_0_0_0, '0']
 - [blocks_stream_to_tagged_stream_0_1, '0', qtgui_const_sink_x_0, '0']
 - [blocks_stream_to_tagged_stream_0_1, '0', qtgui_time_sink_x_0_1_1_0_0, '0']
 - [blocks_stream_to_tagged_stream_0_1, '0', virtual_sink_0_0, '0']
 - [blocks_stream_to_tagged_stream_0_1, '0', virtual_sink_0_0_1, '0']
 - [blocks_tagged_stream_mux_0, '0', virtual_sink_0_0_0, '0']
-- [digital_chunks_to_symbols_xx_0, '0', blocks_tagged_stream_mux_0, '0']
+- [digital_chunks_to_symbols_xx_0, '0', blocks_multiply_const_vxx_1, '0']
 - [digital_chunks_to_symbols_xx_0_0_0, '0', blocks_stream_to_tagged_stream_0_1, '0']
 - [digital_ofdm_carrier_allocator_cvc_0, '0', fft_vxx_0, '0']
 - [digital_ofdm_cyclic_prefixer_0, '0', blocks_multiply_const_vxx_0, '0']

@@ -68,6 +68,34 @@ blocks:
     coordinate: [648, 28.0]
     rotation: 0
     state: enabled
+- name: header_formatter_tx_robust
+  id: variable
+  parameters:
+    comment: ''
+    value: deepjscc.packet_header_ofdm_robust(occupied_carriers, n_syms=1, len_tag_key="packet_len",   frame_len_tag_key=length_tag_key,
+      num_tag_key="packet_num", bits_per_header_sym=header_mod.bits_per_symbol(),
+      bits_per_payload_sym=8, scramble_header=True, num_bits=16,use_fec=True)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [112, 376.0]
+    rotation: 0
+    state: enabled
+- name: header_formatter_tx_wide
+  id: variable
+  parameters:
+    comment: ''
+    value: deepjscc.packet_header_ofdm_wide(occupied_carriers, n_syms=1, len_tag_key="packet_len",   frame_len_tag_key=length_tag_key,
+      num_tag_key="packet_num", bits_per_header_sym=header_mod.bits_per_symbol(),
+      bits_per_payload_sym=8, scramble_header=True)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [0, 376.0]
+    rotation: 0
+    state: enabled
 - name: header_mod
   id: variable
   parameters:
@@ -102,7 +130,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [248, 256.0]
+    coordinate: [264, 256.0]
     rotation: 0
     state: enabled
 - name: packet_len
@@ -126,7 +154,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [344, 256.0]
+    coordinate: [360, 256.0]
     rotation: 0
     state: enabled
 - name: pilot_symbols
@@ -138,7 +166,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [424, 256.0]
+    coordinate: [440, 256.0]
     rotation: 0
     state: enabled
 - name: sw_multiplier
@@ -471,9 +499,7 @@ blocks:
     affinity: ''
     alias: ''
     comment: 'Samples: 48'
-    header_formatter: deepjscc.packet_header_ofdm_wide(occupied_carriers, n_syms=1,
-      len_tag_key="packet_len",   frame_len_tag_key=length_tag_key, num_tag_key="packet_num",
-      bits_per_header_sym=header_mod.bits_per_symbol(), bits_per_payload_sym=8, scramble_header=True)
+    header_formatter: header_formatter_tx_robust
     len_tag_key: '"packet_len"'
     maxoutbuf: '0'
     minoutbuf: '0'
