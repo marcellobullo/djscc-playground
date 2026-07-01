@@ -47,13 +47,32 @@ blocks:
     start: '0'
     step: '4'
     stop: '28'
-    value: '0'
+    value: snr_db
     widget: counter_slider
   states:
     bus_sink: false
     bus_source: false
     bus_structure: null
     coordinate: [208, 76.0]
+    rotation: 0
+    state: enabled
+- name: snr_db
+  id: parameter
+  parameters:
+    alias: ''
+    comment: 'Initial value fed into the SNR GUI slider above; used by the
+      soft LDPC decoder''s noise-power estimate (npwr = 10**(-SNR/10)).
+      Overridable from the command line as --snr-db.'
+    hide: none
+    label: SNR (dB)
+    short_id: ''
+    type: intx
+    value: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [656, 8.0]
     rotation: 0
     state: enabled
 - name: fft_len
