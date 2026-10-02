@@ -169,6 +169,7 @@ TX_ARGS=(
   --ldpc-k "$LDPC_K"
   --bits-per-symbol "$MOD_ORDER"
   --interval "$INTERVAL"
+  --interleave  
 )
 [[ -n "$CODEC_QUALITY" ]] && TX_ARGS+=(--codec-quality "$CODEC_QUALITY")
 [[ "$INTERLEAVE" -eq 1 ]] && TX_ARGS+=(--interleave)

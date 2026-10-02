@@ -36,7 +36,7 @@ import threading
 
 class djscc_tx_mimo(gr.top_block, Qt.QWidget):
 
-    def __init__(self, band=5e6, carrier_freq=2.45e9, device_address="192.168.1.68", device_address_1="192.168.1.22", samp_rate=1e6):
+    def __init__(self, band=1.5e6, carrier_freq=2.45e9, device_address="192.168.1.67", device_address_1="192.168.1.22", samp_rate=1e6):
         gr.top_block.__init__(self, "OFDM Image Transmitter for DJSCC (2x2 MIMO)", catch_exceptions=True)
         Qt.QWidget.__init__(self)
         self.setWindowTitle("OFDM Image Transmitter for DJSCC (2x2 MIMO)")
@@ -201,6 +201,88 @@ class djscc_tx_mimo(gr.top_block, Qt.QWidget):
         self._qtgui_waterfall_sink_x_0_win = sip.wrapinstance(self.qtgui_waterfall_sink_x_0.qwidget(), Qt.QWidget)
 
         self.top_layout.addWidget(self._qtgui_waterfall_sink_x_0_win)
+        self.qtgui_const_sink_x_0_0 = qtgui.const_sink_c(
+            1024, #size
+            "TX Constellation 1", #name
+            1, #number of inputs
+            None # parent
+        )
+        self.qtgui_const_sink_x_0_0.set_update_time(0.10)
+        self.qtgui_const_sink_x_0_0.set_y_axis((-2), 2)
+        self.qtgui_const_sink_x_0_0.set_x_axis((-2), 2)
+        self.qtgui_const_sink_x_0_0.set_trigger_mode(qtgui.TRIG_MODE_FREE, qtgui.TRIG_SLOPE_POS, 0.0, 0, "")
+        self.qtgui_const_sink_x_0_0.enable_autoscale(True)
+        self.qtgui_const_sink_x_0_0.enable_grid(False)
+        self.qtgui_const_sink_x_0_0.enable_axis_labels(True)
+
+
+        labels = ['', '', '', '', '',
+            '', '', '', '', '']
+        widths = [1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1]
+        colors = ["blue", "red", "green", "black", "cyan",
+            "magenta", "yellow", "dark red", "dark green", "dark blue"]
+        styles = [0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0]
+        markers = [0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0]
+        alphas = [1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0]
+
+        for i in range(1):
+            if len(labels[i]) == 0:
+                self.qtgui_const_sink_x_0_0.set_line_label(i, "Data {0}".format(i))
+            else:
+                self.qtgui_const_sink_x_0_0.set_line_label(i, labels[i])
+            self.qtgui_const_sink_x_0_0.set_line_width(i, widths[i])
+            self.qtgui_const_sink_x_0_0.set_line_color(i, colors[i])
+            self.qtgui_const_sink_x_0_0.set_line_style(i, styles[i])
+            self.qtgui_const_sink_x_0_0.set_line_marker(i, markers[i])
+            self.qtgui_const_sink_x_0_0.set_line_alpha(i, alphas[i])
+
+        self._qtgui_const_sink_x_0_0_win = sip.wrapinstance(self.qtgui_const_sink_x_0_0.qwidget(), Qt.QWidget)
+        self.top_layout.addWidget(self._qtgui_const_sink_x_0_0_win)
+        self.qtgui_const_sink_x_0 = qtgui.const_sink_c(
+            1024, #size
+            "TX Constellation 0", #name
+            1, #number of inputs
+            None # parent
+        )
+        self.qtgui_const_sink_x_0.set_update_time(0.10)
+        self.qtgui_const_sink_x_0.set_y_axis((-2), 2)
+        self.qtgui_const_sink_x_0.set_x_axis((-2), 2)
+        self.qtgui_const_sink_x_0.set_trigger_mode(qtgui.TRIG_MODE_FREE, qtgui.TRIG_SLOPE_POS, 0.0, 0, "")
+        self.qtgui_const_sink_x_0.enable_autoscale(True)
+        self.qtgui_const_sink_x_0.enable_grid(False)
+        self.qtgui_const_sink_x_0.enable_axis_labels(True)
+
+
+        labels = ['', '', '', '', '',
+            '', '', '', '', '']
+        widths = [1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1]
+        colors = ["blue", "red", "green", "black", "cyan",
+            "magenta", "yellow", "dark red", "dark green", "dark blue"]
+        styles = [0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0]
+        markers = [0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0]
+        alphas = [1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0]
+
+        for i in range(1):
+            if len(labels[i]) == 0:
+                self.qtgui_const_sink_x_0.set_line_label(i, "Data {0}".format(i))
+            else:
+                self.qtgui_const_sink_x_0.set_line_label(i, labels[i])
+            self.qtgui_const_sink_x_0.set_line_width(i, widths[i])
+            self.qtgui_const_sink_x_0.set_line_color(i, colors[i])
+            self.qtgui_const_sink_x_0.set_line_style(i, styles[i])
+            self.qtgui_const_sink_x_0.set_line_marker(i, markers[i])
+            self.qtgui_const_sink_x_0.set_line_alpha(i, alphas[i])
+
+        self._qtgui_const_sink_x_0_win = sip.wrapinstance(self.qtgui_const_sink_x_0.qwidget(), Qt.QWidget)
+        self.top_layout.addWidget(self._qtgui_const_sink_x_0_win)
         self.mux_b = blocks.tagged_stream_mux(gr.sizeof_gr_complex*1, "packet_len", 0)
         self.mux_a = blocks.tagged_stream_mux(gr.sizeof_gr_complex*1, "packet_len", 0)
         self.hdrgen_b = digital.packet_headergenerator_bb(deepjscc.packet_header_ofdm_wide(occupied_carriers, n_syms=1, len_tag_key="packet_len", frame_len_tag_key=length_tag_key, num_tag_key="packet_num", bits_per_header_sym=header_mod.bits_per_symbol(), bits_per_payload_sym=8, scramble_header=True), "packet_len")
@@ -255,8 +337,10 @@ class djscc_tx_mimo(gr.top_block, Qt.QWidget):
         self.connect((self.scale_b, 0), (self.uhd_usrp_sink_0, 1))
         self.connect((self.sts_a, 0), (self.c2r_a, 0))
         self.connect((self.sts_a, 0), (self.mux_a, 1))
+        self.connect((self.sts_a, 0), (self.qtgui_const_sink_x_0, 0))
         self.connect((self.sts_b, 0), (self.c2r_b, 0))
         self.connect((self.sts_b, 0), (self.mux_b, 1))
+        self.connect((self.sts_b, 0), (self.qtgui_const_sink_x_0_0, 0))
         self.connect((self.zero_hdr_b, 0), (self.mux_b, 0))
         self.connect((self.zeromq_sub_source_0, 0), (self.blocks_deinterleave_0, 0))
 
@@ -404,13 +488,13 @@ def argument_parser():
     description = '2x2 spatial-multiplexing MIMO OFDM image transmitter for DJSCC'
     parser = ArgumentParser(description=description)
     parser.add_argument(
-        "--band", dest="band", type=eng_float, default=eng_notation.num_to_str(float(5e6)),
+        "--band", dest="band", type=eng_float, default=eng_notation.num_to_str(float(1.5e6)),
         help="Set Band [default=%(default)r]")
     parser.add_argument(
         "--carrier-freq", dest="carrier_freq", type=eng_float, default=eng_notation.num_to_str(float(2.45e9)),
         help="Set Carrier Frequency [default=%(default)r]")
     parser.add_argument(
-        "--device-address", dest="device_address", type=str, default="192.168.1.68",
+        "--device-address", dest="device_address", type=str, default="192.168.1.67",
         help="Set Device IP address  [default=%(default)r]")
     parser.add_argument(
         "--device-address-1", dest="device_address_1", type=str, default="192.168.1.22",
