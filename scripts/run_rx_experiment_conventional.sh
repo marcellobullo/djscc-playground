@@ -189,6 +189,7 @@ RX_ARGS=(
   --device "$DEVICE"
   --output-dir "$OUTDIR"
   --timeout "$TIMEOUT"
+  --interleave
 )
 [[ "$INTERLEAVE" -eq 1 ]]  && RX_ARGS+=(--interleave)
 [[ "$EXP_ID_MODE" -eq 1 ]] && RX_ARGS+=(--exp-id-mode)

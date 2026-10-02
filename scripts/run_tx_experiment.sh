@@ -131,6 +131,7 @@ TX_ARGS=(
   --source folder
   --path "$DATASET"
   --interval "$INTERVAL"
+  #--snr-db "$SNR"
 )
 [[ "$INTERLEAVE" -eq 1 ]] && TX_ARGS+=(--interleave)
 [[ ${#EXTRA[@]} -gt 0 ]] && TX_ARGS+=("${EXTRA[@]}")

@@ -553,7 +553,7 @@ def receive_loop(socket: zmq.Socket,
             # transmission order. Do NOT use current_image_idx: the anchor is
             # reset per image, so it is always 0.
             img_id = n_total - 1
-            fname = f"image_{img_id:03d}.png"
+            fname = f"image_{img_id:03d}.png" if decode_ok else f"image_{img_id:03d}_fail.png"
             if cfg.save:
                 if decode_ok:
                     cv2.imwrite(os.path.join(cfg.output_dir, fname), bgr)
@@ -579,7 +579,8 @@ def receive_loop(socket: zmq.Socket,
                   f"({PKT_PER_IMG - n_missed}/{PKT_PER_IMG} slots)")
         elif cfg.save and bgr is not None:
             stamp = time.strftime("%Y%m%d_%H%M%S")
-            fname = f"image_{n_decoded_ok:03d}_{stamp}.png"
+            suffix = "" if decode_ok else "_fail"
+            fname = f"image_{n_decoded_ok:03d}_{stamp}{suffix}.png"
             cv2.imwrite(os.path.join(cfg.output_dir, fname), bgr)
 
         display = bgr.copy()
