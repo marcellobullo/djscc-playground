@@ -18,3 +18,7 @@ checkpoints/
 # runtime outputs
 received_images*/
 *.log
+
+# results
+results/
+results-backup/
