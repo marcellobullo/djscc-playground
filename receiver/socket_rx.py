@@ -27,7 +27,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from jscc import OutputKind, load_aligner, load_codec  # noqa: E402
-from jscc.snr_estimation import C_CHEST, pooled_snr_eff_db, snr_eff_db  # noqa: E402
+from jscc.snr_estimation import LOSS_C0, LOSS_K, per_packet_snr_db, pooled_snr_eff_db  # noqa: E402
 
 # OFDM data-subcarrier layout (for the live-SNR Nulls+Taps estimate).
 _OCCUPIED = (list(range(-26, -21)) + list(range(-20, -7)) + list(range(-6, 0))
@@ -152,22 +152,23 @@ def receive_loop(codec, socket, snr_socket, args):
             if pwr > 0:
                 symbols *= np.complex64(np.sqrt(args.renorm_target / pwr))
 
-        # live SNR -> decoder CSI. Build a per-packet effective-SNR vector
-        # (post-EQ: 10log10(1 / mean(sigma2/|H_k|^2))) indexed by slot, and feed it
-        # via set_csi_vector when the decoder consumes a per-packet map (spatial
-        # CSI). Otherwise collapse to one scalar, as before.
+        # live SNR -> decoder CSI. Build a per-packet decoder-side SNR vector indexed by
+        # slot (smoothed over neighbouring packets) and feed it via set_csi_vector when the
+        # decoder consumes a per-packet map (spatial CSI). Otherwise collapse to one scalar
+        # pooled over the image, lowered for the zero-filled (lost) packets.
         if snr_socket is not None and codec.needs_csi:
             use_vec = hasattr(codec, "set_csi_vector")
-            kw = dict(tx_power=args.tx_power, c_chest=args.c_chest, ramp_corrected=not args.no_ramp_correction)
-            # (a) decoder-side SNR from the equalized pilots (default): measures the in-band noise and the equalized
-            #     signal itself, so it needs no equalizer/channel-estimate scale assumption.
-            pil_pkt = np.full(PKT_PER_IMG, np.nan, dtype=np.float32)
-            pil_stats = []
+            kw = dict(tx_power=args.tx_power, c0=args.loss_c0, k=args.loss_k, ramp_corrected=not args.no_ramp_correction)
+            # (a) decoder-side SNR from the pilot statistics (default): measures the in-band noise and the pilot
+            #     tones themselves, so it needs no equalizer/channel-estimate scale assumption.
+            by_slot = [None] * PKT_PER_IMG
             for pn, slot in pn_log:
                 st = pil_by_pn.get(pn)
                 if st is not None and st[1] > 0:
-                    pil_stats.append(st)
-                    pil_pkt[slot] = snr_eff_db(st[1], st[2], st[0], st[3], **kw)
+                    by_slot[slot] = st
+            pil_stats = [st for st in by_slot if st is not None]
+            pil_pkt = per_packet_snr_db(by_slot, window=args.snr_smooth, **kw)
+            erasure = 0.0 if args.no_erasure_csi else sum(1 for v in seen if not v) / PKT_PER_IMG
             # (b) legacy guard-bin nulls + channel taps: assumes unit signal power (reads ~2.7-3.8 dB high on the
             #     decoder side) and trusts the header-gated taps association; kept as a fallback / cross-check.
             leg_pkt = np.full(PKT_PER_IMG, np.nan, dtype=np.float32)
@@ -195,7 +196,7 @@ def receive_loop(codec, socket, snr_socket, args):
                       f"mean={np.nanmean(per_pkt):.2f} dB")
             else:
                 if tag == "pilots":
-                    snr = pooled_snr_eff_db(pil_stats, **kw)
+                    snr = pooled_snr_eff_db(pil_stats, erasure, **kw)
                     n_used = len(pil_stats)
                 elif noise:
                     avg = float(np.mean(noise))
@@ -362,7 +363,10 @@ def parse_args():
                    help="live SNR source: equalized-pilot statistics (default) or the old guard-bin nulls + channel taps")
     p.add_argument("--tx-power", type=float, default=2.0,
                    help="average complex-symbol power of the transmitted latents (2.0 for all codecs: P=1 per real value)")
-    p.add_argument("--c-chest", type=float, default=C_CHEST, help="channel-estimate noise factor (calibration constant)")
+    p.add_argument("--loss-c0", type=float, default=LOSS_C0, help="receiver-loss model, first-order term (see jscc/snr_estimation.py)")
+    p.add_argument("--loss-k", type=float, default=LOSS_K, help="receiver-loss model, second-order term (grows the loss at low SNR)")
+    p.add_argument("--snr-smooth", type=int, default=5, help="per-packet CSI: average noise/tone power over this many neighbouring packets (1 = off)")
+    p.add_argument("--no-erasure-csi", action="store_true", help="scalar CSI: do not lower the SNR for zero-filled (lost) packets")
     p.add_argument("--no-ramp-correction", action="store_true",
                    help="set if the RX flowgraph has no cfo_ramp_corrector: adds the uncorrected phase-ramp error to the estimate")
     p.add_argument("--snr-offset-db", type=float, default=0.0, help="constant added to the live SNR before it is fed to the decoder")

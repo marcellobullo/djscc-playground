@@ -16,7 +16,7 @@ from gnuradio import deepjscc
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
 import e2e_link as E
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..", "..")))
-from jscc.snr_estimation import pooled_snr_eff_db, snr_eff_db   # the code socket_rx.py runs
+from jscc.snr_estimation import per_packet_snr_db, pilot_stats, pooled_snr_eff_db, snr_eff_db   # the code socket_rx.py runs
 ROOT = E.ROOT
 FFT, CP, PKT = E.FFT, E.CP, E.PKT
 DATA_IDX = np.array([k + 32 for k in (list(range(-26, -21)) + list(range(-20, -7)) + list(range(-6, 0)) + list(range(1, 7)) + list(range(8, 21)) + list(range(22, 27))) if k not in (-21, -7, 7, 21)])
@@ -115,7 +115,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--snr", type=float, nargs="+", default=[0, 4, 8, 12, 16, 20, 24, 28])
     ap.add_argument("--frames", type=int, default=300); ap.add_argument("--gr-gap", type=int, default=2)
-    ap.add_argument("--cfo-hz", type=float, default=0.0); ap.add_argument("--cpe", action="store_true", help="truth = what the decoder sees with the CFO-ramp corrector (fixed chain)"); ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--cfo-hz", type=float, default=0.0); ap.add_argument("--cpe", action="store_true", help="truth = what the decoder sees with the CFO-ramp corrector (fixed chain)"); ap.add_argument("--seed", type=int, default=0); ap.add_argument("--port", type=int, default=5571)
     ap.add_argument("--out", default=os.path.join(ROOT, "results", "gr-channel", "snr_estimation"))
     a = ap.parse_args(); os.makedirs(a.out, exist_ok=True)
     rng = np.random.default_rng(a.seed)
@@ -126,7 +126,7 @@ def main():
     gap = np.zeros(int(0.5 * E.SAMP_RATE), np.complex64)
     x = np.concatenate([gap, bb, gap]); act = np.concatenate([np.zeros(len(gap), bool), np.ones(len(bb), bool), np.zeros(len(gap), bool)])
     ns = argparse.Namespace(clip=0, taps=0, sfo_ppm=0, cfo_hz=a.cfo_hz, pn_linewidth=0, iq_amp_db=0, iq_phase_deg=0, dc=0, snr_bw=0)
-    port = 5571; ctx = zmq.Context.instance(); results = []
+    port = a.port; ctx = zmq.Context.instance(); results = []
     for snr in a.snr:
         sock = ctx.socket(zmq.PULL); sock.setsockopt(zmq.RCVHWM, 100000); sock.bind(f"tcp://127.0.0.1:{port}")
         msgs, stop = [], threading.Event()
@@ -153,7 +153,7 @@ def main():
                 g_ = lambda k: pmt.to_double(pmt.dict_ref(meta, pmt.intern(k), pmt.from_double(np.nan)))
                 pil[pn] = (g_("slope"), g_("sigma2"), g_("amp2"), pmt.to_long(pmt.dict_ref(meta, pmt.intern("n_sym"), pmt.from_long(0))))
         rows = []
-        agg = dict(A=[], B=[], C=[], T=[]); agg_new = []
+        agg = dict(A=[], B=[], C=[], T=[]); agg_new = []; proto = []
         for pn, (fr, rawfr) in frames.items():
             if not (0 <= pn < a.frames) or len(fr) < 2: continue
             s = sym[pn * PKT:(pn + 1) * PKT]; r = E.serialize((fr, rawfr), a.cpe)
@@ -163,6 +163,7 @@ def main():
             if pn in h and pn in raw:
                 npw = float(np.mean(raw[pn] / np.maximum(np.abs(h[pn][DATA_IDX]) ** 2, 1e-12)))
                 row["socket_rx"] = float(10 * np.log10(1.0 / npw))                           # formula used by socket_rx.py
+            if pn in pil: row["logger"] = [float(v) for v in pil[pn]]                          # (slope, sigma2, amp2, n_sym)
             if pn in pil and pil[pn][1] > 0:                                                  # NEW: logger stats -> jscc.snr_estimation
                 row["new"] = snr_eff_db(pil[pn][1], pil[pn][2], pil[pn][0], pil[pn][3], ramp_corrected=a.cpe)
                 agg_new.append(pil[pn])
@@ -188,6 +189,19 @@ def main():
                 row["D_plus_ramp"] = snr_from(npw + ramp, pa)
             ec_, ee_ = est_pilots_principled(fr, remove_ramp_loss=not a.cpe)
             row["E_chan"] = float(ec_); row["E_eff"] = float(ee_)
+            st = pilot_stats(fr[:, PILOT_IDX], PILOT_SYM)
+            if pn in h:
+                hd = h[pn][E.DATA_BINS]
+                al = np.vdot(hd, Hk) / np.vdot(hd, hd)
+                row["v_true"] = float(np.mean(np.abs(Hk - al * hd) ** 2) / np.mean(np.abs(al * hd) ** 2))   # real chan-est error of the taps
+                Pd = fr[:, PILOT_IDX] * np.conj(PILOT_SYM)[None]
+                Pd = Pd * np.exp(-1j * st[0] * np.arange(len(Pd)))[:, None]
+                q = Pd.mean(0) / h[pn][PILOT_IDX]                      # pilots divided by the receiver's own estimate
+                spread = np.mean(np.abs(q - q.mean()) ** 2) * 4 / 3 - np.mean(st[1] / len(Pd) / np.abs(h[pn][PILOT_IDX]) ** 2)
+                row["v_pil"] = float(max(spread, 0) / abs(q.mean()) ** 2)
+                snr_ch = max(st[2], 1e-12) / st[1] * 2.0
+                row["pred_true_v"] = float(10 * np.log10(1 / (1 / snr_ch + row["v_true"])))
+                proto.append((st[1], st[2], row["v_pil"], row["v_true"]))
             rows.append(row)
         def stat(k):
             v = np.array([(r[k] - r["true"]) for r in rows if k in r]); return (float(v.mean()), float(v.std()), len(v)) if len(v) else (np.nan, np.nan, 0)
@@ -195,14 +209,31 @@ def main():
         # image-level (all packets pooled in the linear domain, what the scalar-CSI decoder gets)
         ia = snr_from(*np.mean(agg["A"], axis=0)); ib = snr_from(*np.mean(agg["B"], axis=0))
         inew = pooled_snr_eff_db(agg_new, ramp_corrected=a.cpe) if agg_new else float("nan"); ic = snr_from(*np.mean(agg["C"], axis=0)); it = float(10 * np.log10(np.mean([b for _, b in agg["T"]]) / np.mean([a_ for a_, _ in agg["T"]])))
-        results.append(dict(snr=snr, n_frames=len(frames), n_h=len(h), n_raw=len(raw), n_pil=len(pil),
+        results.append(dict(snr=snr, frames_tx=a.frames, n_frames=len(frames), n_h=len(h), n_raw=len(raw), n_pil=len(pil),
                             true_mean=float(np.mean([r["true"] for r in rows])), socket_rx=sr, pilot_logger=pl, A=ea, B=eb, C=ec, D=ed, E=eE, image_level=dict(true=it, A=ia, B=ib, C=ic, new=inew), rows=rows))
+        s2m, a2m, vpm, vtm = [np.mean([x[k] for x in proto]) for k in range(4)]
+        snr_ch = a2m / s2m * 2.0
+        pr = lambda v: 10 * np.log10(1 / (1 / snr_ch + v))
+        print(f"   channel SNR {10*np.log10(snr_ch):6.2f} | chan-est error: true {vtm:.2e} (= c {vtm*snr_ch:.2f}), from pilots/taps {vpm:.2e} (= c {vpm*snr_ch:.2f}) | "
+              f"image-level: with true v {pr(vtm):6.2f} (err {pr(vtm)-it:+.2f}), with pilot v {pr(vpm):6.2f} (err {pr(vpm)-it:+.2f})")
+        # code path of socket_rx.py: smoothed per-packet CSI and erasure-aware scalar CSI
+        by_slot = [pil.get(i) for i in range(a.frames)]
+        sm = per_packet_snr_db(by_slot, window=5, ramp_corrected=a.cpe)
+        dsm = np.array([sm[r["pn"]] - r["true"] for r in rows if np.isfinite(sm[r["pn"]])])
+        good = [r for r in rows if "logger" in r and r["logger"][1] > 0]
+        p_lost = 1 - len(good) / a.frames
+        sig_ = np.mean([r["g2"] * r["ps"] for r in good]); mse_ = np.mean([r["mse"] for r in good])
+        t_er = 10 * np.log10(sig_ / ((len(good) * mse_ + (a.frames - len(good)) * sig_) / a.frames))
+        e_er = pooled_snr_eff_db(agg_new, p_lost, ramp_corrected=a.cpe)
+        results[-1].update(smoothed=(float(dsm.mean()), float(dsm.std())), erasure=dict(p=p_lost, truth=t_er, est=e_er))
+        print(f"   socket_rx path: per-packet (smoothed w=5) bias/std {dsm.mean():+5.2f}/{dsm.std():.2f} | lost {100*p_lost:4.1f}% -> "
+              f"image-level incl. erasures: truth {t_er:6.2f}  est {e_er:6.2f}  err {e_er - t_er:+.2f}")
         print(f"nominal {snr:4.0f} dB | pkts {len(frames):3d} | true post-EQ SNR {results[-1]['true_mean']:6.2f} (image-level {it:6.2f}) | "
               f"per-packet est-true bias/std:  OLD socket_rx {sr[0]:+5.2f}/{sr[1]:.2f}   NEW {pl[0]:+5.2f}/{pl[1]:.2f} | image-level NEW {inew:6.2f} (err {inew - it:+.2f})", flush=True)
     for r in results:
         rr = [x for x in r["rows"] if "E_chan" in x and "snr_raw_true" in x]
         if rr: r["E_chan_vs_channel_snr"] = (float(np.mean([x["E_chan"] - x["snr_raw_true"] for x in rr])), float(np.std([x["E_chan"] - x["snr_raw_true"] for x in rr])))
-    json.dump(dict(args=vars(a), results=results), open(os.path.join(a.out, f"snr_est_gap{a.gr_gap}_cfo{a.cfo_hz:g}{'_cpe' if a.cpe else ''}.json"), "w"))
+    json.dump(dict(args=vars(a), results=results), open(os.path.join(a.out, f"snr_est_gap{a.gr_gap}_cfo{a.cfo_hz:g}{'_cpe' if a.cpe else ''}_seed{a.seed}.json"), "w"))
 
 
 if __name__ == "__main__":
