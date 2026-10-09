@@ -92,6 +92,7 @@ class djscc_tx(gr.top_block, Qt.QWidget):
         self.header_formatter_tx_wide = header_formatter_tx_wide = deepjscc.packet_header_ofdm_wide(occupied_carriers, n_syms=1, len_tag_key="packet_len",   frame_len_tag_key=length_tag_key, num_tag_key="packet_num", bits_per_header_sym=header_mod.bits_per_symbol(), bits_per_payload_sym=8, scramble_header=True)
         self.header_formatter_tx_robust = header_formatter_tx_robust = deepjscc.packet_header_ofdm_robust(occupied_carriers, n_syms=1, len_tag_key="packet_len",   frame_len_tag_key=length_tag_key, num_tag_key="packet_num", bits_per_header_sym=header_mod.bits_per_symbol(), bits_per_payload_sym=8, scramble_header=True, num_bits=16,use_fec=True)
         self.header_boost = header_boost = 2
+        self.frame_gap = frame_gap = 16
         self.fft_len = fft_len = 64
 
         ##################################################
@@ -353,6 +354,7 @@ class djscc_tx(gr.top_block, Qt.QWidget):
             length_tag_key)
         self.digital_ofdm_carrier_allocator_cvc_0 = digital.ofdm_carrier_allocator_cvc( fft_len, occupied_carriers, pilot_carriers, pilot_symbols, (sync_word1, sync_word2), length_tag_key, True)
         self.digital_chunks_to_symbols_xx_0 = digital.chunks_to_symbols_bc(header_mod.points(), 1)
+        self.digital_burst_shaper_xx_0 = digital.burst_shaper_cc(([]), 0, frame_gap, False, length_tag_key)
         self.blocks_tagged_stream_mux_0 = blocks.tagged_stream_mux(gr.sizeof_gr_complex*1, "packet_len", 0)
         self.blocks_stream_to_tagged_stream_0 = blocks.stream_to_tagged_stream(gr.sizeof_gr_complex, 1, packet_len, "packet_len")
         self.blocks_stream_to_tagged_stream_0.set_min_output_buffer(2000000)
@@ -381,9 +383,10 @@ class djscc_tx(gr.top_block, Qt.QWidget):
         self.connect((self.blocks_stream_to_tagged_stream_0, 0), (self.qtgui_time_sink_x_0_1_1_0_0, 0))
         self.connect((self.blocks_stream_to_tagged_stream_0, 0), (self.zeromq_pub_sink_0, 0))
         self.connect((self.blocks_tagged_stream_mux_0, 0), (self.digital_ofdm_carrier_allocator_cvc_0, 0))
+        self.connect((self.digital_burst_shaper_xx_0, 0), (self.blocks_multiply_const_vxx_0, 0))
         self.connect((self.digital_chunks_to_symbols_xx_0, 0), (self.blocks_multiply_const_vxx_1, 0))
         self.connect((self.digital_ofdm_carrier_allocator_cvc_0, 0), (self.fft_vxx_0, 0))
-        self.connect((self.digital_ofdm_cyclic_prefixer_0, 0), (self.blocks_multiply_const_vxx_0, 0))
+        self.connect((self.digital_ofdm_cyclic_prefixer_0, 0), (self.digital_burst_shaper_xx_0, 0))
         self.connect((self.digital_packet_headergenerator_bb_0, 0), (self.digital_chunks_to_symbols_xx_0, 0))
         self.connect((self.fft_vxx_0, 0), (self.digital_ofdm_cyclic_prefixer_0, 0))
         self.connect((self.zeromq_sub_source_0, 0), (self.blocks_stream_to_tagged_stream_0, 0))
@@ -516,6 +519,12 @@ class djscc_tx(gr.top_block, Qt.QWidget):
     def set_header_boost(self, header_boost):
         self.header_boost = header_boost
         self.blocks_multiply_const_vxx_1.set_k(self.header_boost)
+
+    def get_frame_gap(self):
+        return self.frame_gap
+
+    def set_frame_gap(self, frame_gap):
+        self.frame_gap = frame_gap
 
     def get_fft_len(self):
         return self.fft_len

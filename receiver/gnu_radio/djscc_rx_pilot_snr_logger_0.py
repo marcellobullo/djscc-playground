@@ -1,4 +1,12 @@
-"""Per-frame equalized-pilot logger for offline SNR estimation."""
+"""Per-frame equalized-pilot statistics for receiver-side SNR estimation (see jscc/snr_estimation.py).
+
+For every packet it sends, over its own non-blocking ZMQ socket, kind='pilots' with
+  slope : residual-CFO phase ramp, rad per OFDM symbol
+  sigma2: noise power per pilot (variance of consecutive-symbol differences / 2, ramp removed)
+  amp2  : debiased pilot-tone power  |mean over symbols|^2 - sigma2 / T
+  n_sym : number of OFDM symbols in the frame
+(The previous version compared the equalized pilots with +-1; the static equalizer leaves them at amplitude ~1.9,
+which made sigma2 meaningless, and socket_rx did not use it.)"""
 
 import threading
 import numpy as np
@@ -36,6 +44,8 @@ class blk(gr.sync_block):
         self.pn_list = []
         self.mean_pilots_list = []
         self.sigma2_list = []
+        self.amp2_list = []
+        self.slope_list = []
         self._lock = threading.Lock()
         self.snr_addr = str(snr_addr)
         self._ctx = None
@@ -67,33 +77,41 @@ class blk(gr.sync_block):
                     self._finalize_frame()
         return n
 
+    def _reset(self):
+        self._curr_pn = None
+        self._curr_pilots = []
+        self._curr_consumed = 0
+        self._curr_fl = 0
+
     def _finalize_frame(self):
-        if self._curr_pn is None or not self._curr_pilots:
-            self._curr_pn = None
-            self._curr_pilots = []
-            self._curr_consumed = 0
-            self._curr_fl = 0
+        if self._curr_pn is None or len(self._curr_pilots) < 3:
+            self._reset()
             return
         arr = np.array(self._curr_pilots, dtype=np.complex64)
-        mean_p = arr.mean(axis=0)
-        n_eq = arr - self.pilot_symbols[None, :]
-        sigma2 = float(np.mean(np.abs(n_eq) ** 2))
+        T = len(arr)
+        p = arr * np.conj(self.pilot_symbols)[None, :]
+        slope = float(np.angle(np.sum(p[1:] * np.conj(p[:-1]))))
+        pd = p * np.exp(-1j * slope * np.arange(T))[:, None]
+        sigma2 = float(np.mean(np.abs(pd[1:] - pd[:-1]) ** 2) / 2)
+        amp2 = float(np.mean(np.abs(pd.mean(axis=0)) ** 2) - sigma2 / T)
         pn_finalized = int(self._curr_pn)
         with self._lock:
             self.pn_list.append(pn_finalized)
-            self.mean_pilots_list.append(mean_p)
+            self.mean_pilots_list.append(arr.mean(axis=0))
             self.sigma2_list.append(sigma2)
+            self.amp2_list.append(amp2)
+            self.slope_list.append(slope)
             if len(self.pn_list) % self.flush_every == 0:
                 self._flush()
         meta = pmt.make_dict()
         meta = pmt.dict_add(meta, pmt.intern('packet_num'), pmt.from_long(pn_finalized))
         meta = pmt.dict_add(meta, pmt.intern('kind'), pmt.intern('pilots'))
         meta = pmt.dict_add(meta, pmt.intern('sigma2'), pmt.from_double(sigma2))
+        meta = pmt.dict_add(meta, pmt.intern('amp2'), pmt.from_double(amp2))
+        meta = pmt.dict_add(meta, pmt.intern('slope'), pmt.from_double(slope))
+        meta = pmt.dict_add(meta, pmt.intern('n_sym'), pmt.from_long(T))
         self._send_nb(pmt.cons(meta, pmt.PMT_NIL))
-        self._curr_pn = None
-        self._curr_pilots = []
-        self._curr_consumed = 0
-        self._curr_fl = 0
+        self._reset()
 
     def _flush(self):
         if not self.pn_list:
@@ -101,7 +119,9 @@ class blk(gr.sync_block):
         np.savez(self.out_path,
                  packet_num=np.array(self.pn_list, dtype=np.int64),
                  mean_pilots=np.array(self.mean_pilots_list, dtype=np.complex64),
-                 sigma2=np.array(self.sigma2_list, dtype=np.float32))
+                 sigma2=np.array(self.sigma2_list, dtype=np.float32),
+                 amp2=np.array(self.amp2_list, dtype=np.float32),
+                 slope=np.array(self.slope_list, dtype=np.float32))
 
     def start(self):
         self._ctx = zmq.Context.instance()
