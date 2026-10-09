@@ -5,9 +5,12 @@
 # Epoch 0 was trained on a Mac (22 min/epoch on MPS); this continues to 20 epochs on a GPU.
 #
 # Needs, relative to the repo root (both are git-ignored):
-#   ckpts/adjscc-matched-snr/last.pth   network + optimizer + epoch (resume state)
+#   ckpts/adjscc-matched-snr/last.pth   network + optimizer + LR schedule + epoch (resume state)
 #   ckpts/adjscc-matched-snr/best/      HF folder (config, code, weights) used to build the model
 #   data/DIV2K_train_HR, data/DIV2K_valid_HR
+# The checkpoint lives in the PRIVATE Hugging Face repo marcellobullo/adjscc-matched-snr and is downloaded
+# automatically when missing (log in first: `huggingface-cli login`, or export HF_TOKEN=...).
+# To publish newer epochs from the server:  huggingface-cli upload marcellobullo/adjscc-matched-snr ckpts/adjscc-matched-snr .
 # If DIV2K is missing:
 #   mkdir -p data && cd data
 #   wget http://data.vision.ee.ethz.ch/cvl/DIV2K/DIV2K_train_HR.zip http://data.vision.ee.ethz.ch/cvl/DIV2K/DIV2K_valid_HR.zip
@@ -18,6 +21,11 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 OUT=ckpts/adjscc-matched-snr
+HF_REPO=marcellobullo/adjscc-matched-snr
+if [[ ! -f "$OUT/last.pth" ]]; then
+  echo "[*] $OUT/last.pth not found -> downloading the checkpoint from the private HF repo $HF_REPO"
+  python -c "from huggingface_hub import snapshot_download; snapshot_download('$HF_REPO', local_dir='$OUT')"
+fi
 for f in "$OUT/last.pth" "$OUT/best/config.json" data/DIV2K_train_HR data/DIV2K_valid_HR; do
   [[ -e "$f" ]] || { echo "[!] missing $f (see the header of this script)" >&2; exit 2; }
 done
