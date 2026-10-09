@@ -305,6 +305,11 @@ def main() -> int:
         optimizer.load_state_dict(ckpt["op"])
         start_epoch = ckpt.get("epoch", 0) + 1
         best_psnr = ckpt.get("Ave_PSNR", 0.0)
+        if "sched" in ckpt:
+            scheduler.load_state_dict(ckpt["sched"])
+        else:                       # older checkpoints: fast-forward the cosine schedule to the resumed epoch
+            for _ in range(start_epoch):
+                scheduler.step()
         print(f"[*] resumed from epoch {start_epoch} (best PSNR {best_psnr:.2f})")
 
     snr_desc = (f"U[{args.snr_min},{args.snr_max}]"
@@ -354,9 +359,9 @@ def main() -> int:
             res = {"psnr": -10 * np.log10(running / max(n, 1) + 1e-10)}
         psnr = res["psnr"]
         mstr = "  ".join(f"{k}={v:.3f}" for k, v in res.items())
-        print(f"[*] epoch {epoch} done in {time.time()-t0:.0f}s  val@{val_snr:.0f}dB  {mstr}")
+        print(f"[*] epoch {epoch} done in {time.time()-t0:.0f}s  lr={optimizer.param_groups[0]['lr']:.2e}  val@{val_snr:.0f}dB  {mstr}")
 
-        torch.save({"net": model.state_dict(), "op": optimizer.state_dict(),
+        torch.save({"net": model.state_dict(), "op": optimizer.state_dict(), "sched": scheduler.state_dict(),
                     "epoch": epoch, "Ave_PSNR": max(best_psnr, psnr)},
                    os.path.join(args.out, "last.pth"))
         if psnr >= best_psnr:
