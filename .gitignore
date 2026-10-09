@@ -22,3 +22,7 @@ received_images*/
 # results
 results/
 results-backup/
+
+# training data and local training runs (brought over / copied separately)
+data/
+ckpts/adjscc-matched-snr/
