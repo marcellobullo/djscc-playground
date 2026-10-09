@@ -45,7 +45,7 @@ if _ROOT not in sys.path:
 
 from jscc.data import make_loader  # noqa: E402
 from jscc.channels import (  # noqa: E402
-    FlatFadingChannel, OFDMMultipathChannel, ScalarCSIChannel, reconcile_csi)
+    FlatFadingChannel, OFDMMultipathChannel, ScalarCSIChannel, TorchAWGN, reconcile_csi)
 from jscc.adjscc.nn import powerConstraint  # noqa: E402
 from jscc.djscc_spatialcsi.nn import packetwise_to_element_map  # noqa: E402
 
@@ -80,9 +80,8 @@ def make_channel(name: str, snr_db: float, coherence_time: int = 1,
                                     packet_len=packet_len)
     if name in ("rayleigh", "rician"):
         return FlatFadingChannel(snr_db=snr_db, fading_type=name, k_factor=k_factor)
-    from kaira.channels import AWGNChannel
     if name == "awgn":
-        return ScalarCSIChannel(AWGNChannel(snr_db=snr_db), snr_db)
+        return ScalarCSIChannel(TorchAWGN(snr_db), snr_db)
     raise ValueError(
         f"unknown --channel {name!r} (awgn|rayleigh|rician|ofdm|none)")
 
@@ -228,6 +227,8 @@ def parse_args():
     p.add_argument("--drop-min", type=float, default=None,
                    help="with --drop-max, sample drop prob ~ U[min,max] per batch")
     p.add_argument("--drop-max", type=float, default=None)
+    p.add_argument("--val-snrs", type=float, nargs="+", default=None,
+                   help="validate at each of these SNRs (dB) and select the best checkpoint on the mean PSNR")
     p.add_argument("--packet-len", type=int, default=960)
     p.add_argument("--sentinel-db", type=float, default=-20.0,
                    help="SNR assigned to dropped packets in the spatial-CSI map")
@@ -343,7 +344,11 @@ def main() -> int:
 
         val_snr = (0.5 * (args.snr_min + args.snr_max)
                    if args.snr_min is not None else args.snr_db)
-        if val_loader:
+        if val_loader and args.val_snrs:
+            per = {s: validate(model, model_type, val_loader, device, args, s, val_metrics) for s in args.val_snrs}
+            res = {"psnr": float(np.mean([r["psnr"] for r in per.values()]))}
+            print("  val PSNR per SNR: " + "  ".join(f"{s:g}dB={r['psnr']:.2f}" for s, r in per.items()))
+        elif val_loader:
             res = validate(model, model_type, val_loader, device, args, val_snr, val_metrics)
         else:
             res = {"psnr": -10 * np.log10(running / max(n, 1) + 1e-10)}
