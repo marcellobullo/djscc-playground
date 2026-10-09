@@ -27,6 +27,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from jscc import OutputKind, load_aligner, load_codec  # noqa: E402
+from jscc.snr_estimation import C_CHEST, pooled_snr_eff_db, snr_eff_db  # noqa: E402
 
 # OFDM data-subcarrier layout (for the live-SNR Nulls+Taps estimate).
 _OCCUPIED = (list(range(-26, -21)) + list(range(-20, -7)) + list(range(-6, 0))
@@ -98,6 +99,7 @@ def receive_loop(codec, socket, snr_socket, args):
     pn_log: list = []
     h_by_pn: dict = {}
     raw_by_pn: dict = {}
+    pil_by_pn: dict = {}
     anchor_pn = None
     cur_img = None
 
@@ -132,6 +134,14 @@ def receive_loop(codec, socket, snr_socket, args):
             stream = stream[perm_fwd]
         symbols = stream[:expected].copy()
 
+        if args.dump_dir:
+            # raw de-interleaved latent as handed to the decoder (pre clip/renorm),
+            # for offline link diagnostics (scripts/analyze_link_symbols.py)
+            os.makedirs(args.dump_dir, exist_ok=True)
+            np.savez_compressed(os.path.join(args.dump_dir, f"frame_{total + 1:04d}.npz"),
+                                symbols=symbols, seen=np.array(seen, dtype=bool),
+                                interleave=bool(args.interleave), packet_len=PKT)
+
         if args.clip_mag > 0:
             mags = np.abs(symbols)
             m = mags > args.clip_mag
@@ -148,7 +158,19 @@ def receive_loop(codec, socket, snr_socket, args):
         # CSI). Otherwise collapse to one scalar, as before.
         if snr_socket is not None and codec.needs_csi:
             use_vec = hasattr(codec, "set_csi_vector")
-            per_pkt = np.full(PKT_PER_IMG, np.nan, dtype=np.float32)
+            kw = dict(tx_power=args.tx_power, c_chest=args.c_chest, ramp_corrected=not args.no_ramp_correction)
+            # (a) decoder-side SNR from the equalized pilots (default): measures the in-band noise and the equalized
+            #     signal itself, so it needs no equalizer/channel-estimate scale assumption.
+            pil_pkt = np.full(PKT_PER_IMG, np.nan, dtype=np.float32)
+            pil_stats = []
+            for pn, slot in pn_log:
+                st = pil_by_pn.get(pn)
+                if st is not None and st[1] > 0:
+                    pil_stats.append(st)
+                    pil_pkt[slot] = snr_eff_db(st[1], st[2], st[0], st[3], **kw)
+            # (b) legacy guard-bin nulls + channel taps: assumes unit signal power (reads ~2.7-3.8 dB high on the
+            #     decoder side) and trusts the header-gated taps association; kept as a fallback / cross-check.
+            leg_pkt = np.full(PKT_PER_IMG, np.nan, dtype=np.float32)
             noise = []
             for pn, slot in pn_log:
                 h, s2 = h_by_pn.get(pn), raw_by_pn.get(pn)
@@ -157,7 +179,9 @@ def receive_loop(codec, socket, snr_socket, args):
                     npw = float((s2 / hp).mean())
                     noise.append(npw)
                     if npw > 0:
-                        per_pkt[slot] = 10.0 * np.log10(1.0 / npw)
+                        leg_pkt[slot] = 10.0 * np.log10(1.0 / npw)
+            per_pkt = pil_pkt if (args.snr_method == "pilots" and np.isfinite(pil_pkt).any()) else leg_pkt
+            tag = "pilots" if per_pkt is pil_pkt else "legacy"
             if use_vec and np.isfinite(per_pkt).any():
                 # seen-but-unestimated slots -> average CSI; missing slots stay
                 # NaN -> the codec maps them to the drop sentinel.
@@ -167,15 +191,24 @@ def receive_loop(codec, socket, snr_socket, args):
                         per_pkt[i] = fill
                 codec.set_csi_vector(per_pkt)
                 nfin = int(np.isfinite(per_pkt).sum())
-                print(f"  [snr] per-packet over {nfin}/{PKT_PER_IMG} pkts, "
+                print(f"  [snr:{tag}] per-packet over {nfin}/{PKT_PER_IMG} pkts, "
                       f"mean={np.nanmean(per_pkt):.2f} dB")
-            elif noise:
-                avg = float(np.mean(noise))
-                snr = 10.0 * np.log10(1.0 / avg) if avg > 0 else args.snr_db
-                codec.set_csi(snr)
-                print(f"  [snr] live={snr:.2f} dB over {len(noise)}/{len(pn_log)} pkts")
+            else:
+                if tag == "pilots":
+                    snr = pooled_snr_eff_db(pil_stats, **kw)
+                    n_used = len(pil_stats)
+                elif noise:
+                    avg = float(np.mean(noise))
+                    snr = 10.0 * np.log10(1.0 / avg) if avg > 0 else args.snr_db
+                    n_used = len(noise)
+                else:
+                    snr = None
+                if snr is not None and np.isfinite(snr):
+                    codec.set_csi(snr + args.snr_offset_db)
+                    leg = f", legacy nulls+taps={10.0 * np.log10(1.0 / np.mean(noise)):.2f} dB" if noise else ""
+                    print(f"  [snr:{tag}] live={snr + args.snr_offset_db:.2f} dB over {n_used}/{len(pn_log)} pkts{leg}")
             for pn, _ in pn_log:
-                h_by_pn.pop(pn, None); raw_by_pn.pop(pn, None)
+                h_by_pn.pop(pn, None); raw_by_pn.pop(pn, None); pil_by_pn.pop(pn, None)
 
         t0 = time.time()
         try:
@@ -244,6 +277,11 @@ def receive_loop(codec, socket, snr_socket, args):
                         elif kind == 'raw':
                             raw_by_pn[pn] = pmt.to_double(pmt.dict_ref(
                                 meta, pmt.intern('sigma2'), pmt.from_double(float('nan'))))
+                        elif kind == 'pilots':
+                            _g = lambda k, d: pmt.to_double(pmt.dict_ref(meta, pmt.intern(k), pmt.from_double(d)))
+                            pil_by_pn[pn] = (_g('slope', float('nan')), _g('sigma2', float('nan')),
+                                             _g('amp2', float('nan')),
+                                             pmt.to_long(pmt.dict_ref(meta, pmt.intern('n_sym'), pmt.from_long(0))))
                     except Exception:
                         pass
 
@@ -320,6 +358,14 @@ def parse_args():
     p.add_argument("--port", default="5558")
     p.add_argument("--connect-host", default="127.0.0.1")
     p.add_argument("--use-live-snr", action="store_true")
+    p.add_argument("--snr-method", choices=["pilots", "legacy"], default="pilots",
+                   help="live SNR source: equalized-pilot statistics (default) or the old guard-bin nulls + channel taps")
+    p.add_argument("--tx-power", type=float, default=2.0,
+                   help="average complex-symbol power of the transmitted latents (2.0 for all codecs: P=1 per real value)")
+    p.add_argument("--c-chest", type=float, default=C_CHEST, help="channel-estimate noise factor (calibration constant)")
+    p.add_argument("--no-ramp-correction", action="store_true",
+                   help="set if the RX flowgraph has no cfo_ramp_corrector: adds the uncorrected phase-ramp error to the estimate")
+    p.add_argument("--snr-offset-db", type=float, default=0.0, help="constant added to the live SNR before it is fed to the decoder")
     p.add_argument("--snr-port", default="5560")
 
     p.add_argument("--output-dir", default="./received_images")
@@ -338,6 +384,9 @@ def parse_args():
     p.add_argument("--clip-mag", type=float, default=5.0)
     p.add_argument("--renorm", action="store_true")
     p.add_argument("--renorm-target", type=float, default=2.0)
+    p.add_argument("--dump-dir", default=None,
+                   help="save each frame's received latent symbols (.npz) for "
+                        "scripts/analyze_link_symbols.py")
     args = p.parse_args()
     args.save = not args.no_save
     return args
