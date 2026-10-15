@@ -1,0 +1,11 @@
+{
+  "kind": "conv",
+  "objective": "end2end",
+  "src_type": "adjscc",
+  "tgt_type": "djscc_spatialcsi",
+  "src_model": "ckpts/adjscc-matched-snr/best",
+  "tgt_model": "marcellobullo/djscc-convnext-cr6-ofdm-spatialcsi",
+  "channel": "ofdm",
+  "tcn": 16,
+  "applied_at": "receiver"
+}
