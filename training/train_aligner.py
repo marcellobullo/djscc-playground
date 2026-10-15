@@ -337,6 +337,9 @@ def parse_args():
     p.add_argument("--device", default="auto")
     p.add_argument("--num-workers", type=int, default=4)
     p.add_argument("--out", default="ckpts/aligner", help="output aligner folder")
+    p.add_argument("--init-aligner", default=None,
+                   help="[end2end] warm start: aligner folder or .pth to continue training from "
+                        "(weights only; Adam and the cosine LR schedule start fresh)")
     p.add_argument("--push-to-hub", default=None,
                    help="optional HF repo id (uploads the aligner folder)")
     return p.parse_args()
@@ -360,6 +363,12 @@ def run_end2end(args, src, src_type, tgt, tgt_type, device, tcn, h, w, H, W):
     aligner = _build_by_kind(args.kind, m=tcn * h * w, tcn=tcn, n_samples=None).to(device)
     n_params = sum(p.numel() for p in aligner.parameters())
     print(f"[*] objective=end2end kind={args.kind} params={n_params} tcn={tcn} {W}x{H}")
+    if args.init_aligner:
+        path = args.init_aligner
+        if os.path.isdir(path):
+            path = os.path.join(path, "aligner.pth")
+        aligner.load_state_dict(torch.load(path, map_location=device))
+        print(f"[*] warm start from {path}")
 
     train_loader = make_loader(args.train_data_dir, H, W, args.batch_size,
                                train=True, num_workers=args.num_workers)
@@ -381,6 +390,10 @@ def run_end2end(args, src, src_type, tgt, tgt_type, device, tcn, h, w, H, W):
           f"epochs={args.epochs} bs={args.batch_size}")
 
     best_psnr = 0.0
+    if args.init_aligner and val_loader:     # never overwrite the starting aligner with a worse one
+        _snr0 = (0.5 * (args.snr_min + args.snr_max) if args.snr_min is not None else args.snr_db)
+        best_psnr = validate(src, src_type, tgt, tgt_type, aligner, val_loader, device, args, _snr0)
+        print(f"[*] starting aligner: val@{_snr0:.0f}dB psnr={best_psnr:.3f}")
     for epoch in range(args.epochs):
         aligner.train()
         running, n = 0.0, 0
