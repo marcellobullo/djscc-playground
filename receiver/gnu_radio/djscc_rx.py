@@ -31,6 +31,7 @@ from gnuradio import gr, pdu
 from gnuradio import uhd
 import time
 from gnuradio import zeromq
+import djscc_rx_cfo_ramp_corrector_0 as cfo_ramp_corrector_0  # embedded python block
 import djscc_rx_chan_taps_logger_0 as chan_taps_logger_0  # embedded python block
 import djscc_rx_pilot_snr_logger_0 as pilot_snr_logger_0  # embedded python block
 import djscc_rx_raw_noise_logger_0 as raw_noise_logger_0  # embedded python block
@@ -231,6 +232,7 @@ class djscc_rx(gr.top_block, Qt.QWidget):
         self.digital_header_payload_demux_0.set_min_output_buffer(2000000)
         self.digital_constellation_decoder_cb_0 = digital.constellation_decoder_cb(header_mod.base())
         self.chan_taps_logger_0 = chan_taps_logger_0.blk(fft_len=fft_len, packet_len=packet_len, out_path="/tmp/h_dataset.npz", snr_addr="tcp://127.0.0.1:5560", flush_every=200)
+        self.cfo_ramp_corrector_0 = cfo_ramp_corrector_0.blk(fft_len=fft_len, pilot_positions=[11, 25, 39, 53], enable=True)
         self.blocks_multiply_xx_0 = blocks.multiply_vcc(1)
         self.blocks_multiply_const_vxx_0_1 = blocks.multiply_const_cc(header_boost)
         self.blocks_delay_0 = blocks.delay(gr.sizeof_gr_complex*1, (fft_len+int(fft_len/4)))
@@ -248,19 +250,21 @@ class djscc_rx(gr.top_block, Qt.QWidget):
         self.connect((self.blocks_multiply_const_vxx_0_1, 0), (self.pdu_tagged_stream_to_pdu_0, 0))
         self.connect((self.blocks_multiply_const_vxx_0_1, 0), (self.qtgui_const_sink_x_0, 0))
         self.connect((self.blocks_multiply_xx_0, 0), (self.digital_header_payload_demux_0, 0))
+        self.connect((self.cfo_ramp_corrector_0, 0), (self.digital_ofdm_serializer_vcc_payload, 0))
         self.connect((self.chan_taps_logger_0, 0), (self.digital_ofdm_frame_equalizer_vcvc_0, 0))
         self.connect((self.digital_constellation_decoder_cb_0, 0), (self.digital_packet_headerparser_b_0_0, 0))
         self.connect((self.digital_header_payload_demux_0, 0), (self.fft_vxx_0_0, 0))
         self.connect((self.digital_header_payload_demux_0, 1), (self.fft_vxx_1, 0))
         self.connect((self.digital_ofdm_chanest_vcvc_0, 0), (self.chan_taps_logger_0, 0))
         self.connect((self.digital_ofdm_frame_equalizer_vcvc_0, 0), (self.digital_ofdm_serializer_vcc_header, 0))
-        self.connect((self.digital_ofdm_frame_equalizer_vcvc_1, 0), (self.digital_ofdm_serializer_vcc_payload, 0))
+        self.connect((self.digital_ofdm_frame_equalizer_vcvc_1, 0), (self.cfo_ramp_corrector_0, 0))
         self.connect((self.digital_ofdm_frame_equalizer_vcvc_1, 0), (self.pilot_snr_logger_0, 0))
         self.connect((self.digital_ofdm_serializer_vcc_header, 0), (self.digital_constellation_decoder_cb_0, 0))
         self.connect((self.digital_ofdm_serializer_vcc_payload, 0), (self.blocks_multiply_const_vxx_0_1, 0))
         self.connect((self.digital_ofdm_sync_sc_cfb_0, 0), (self.analog_frequency_modulator_fc_0, 0))
         self.connect((self.digital_ofdm_sync_sc_cfb_0, 1), (self.digital_header_payload_demux_0, 1))
         self.connect((self.fft_vxx_0_0, 0), (self.digital_ofdm_chanest_vcvc_0, 0))
+        self.connect((self.fft_vxx_1, 0), (self.cfo_ramp_corrector_0, 1))
         self.connect((self.fft_vxx_1, 0), (self.digital_ofdm_frame_equalizer_vcvc_1, 0))
         self.connect((self.fft_vxx_1, 0), (self.raw_noise_logger_0, 0))
         self.connect((self.uhd_usrp_source_0_0, 0), (self.blocks_delay_0, 0))
@@ -361,6 +365,7 @@ class djscc_rx(gr.top_block, Qt.QWidget):
         self.set_payload_equalizer(digital.ofdm_equalizer_static(self.fft_len, self.occupied_carriers, self.pilot_carriers, self.pilot_symbols))
         self.analog_frequency_modulator_fc_0.set_sensitivity((-2.0/self.fft_len))
         self.blocks_delay_0.set_dly(int((self.fft_len+int(self.fft_len/4))))
+        self.cfo_ramp_corrector_0.fft_len = self.fft_len
         self.chan_taps_logger_0.fft_len = self.fft_len
         self.pilot_snr_logger_0.fft_len = self.fft_len
         self.raw_noise_logger_0.fft_len = self.fft_len
@@ -431,6 +436,15 @@ def argument_parser():
         "--device-address", dest="device_address", type=str, default="192.168.1.67",
         help="Set Device IP address  [default=%(default)r]")
     parser.add_argument(
+        "--device", dest="device", choices=["usrp", "lime"], default="usrp",
+        help="RX radio: usrp (UHD, --device-address) or lime (LimeSDR via SoapySDR) [default=%(default)r]")
+    parser.add_argument(
+        "--soapy-args", dest="soapy_args", type=str, default="driver=lime",
+        help="SoapySDR device string for --device lime, e.g. 'driver=lime,serial=...' [default=%(default)r]")
+    parser.add_argument(
+        "--lime-antenna", dest="lime_antenna", type=str, default="LNAH",
+        help="LimeSDR RX antenna: LNAH (~2-2.6 GHz) or LNAW (wideband) [default=%(default)r]")
+    parser.add_argument(
         "--samp-rate", dest="samp_rate", type=eng_float, default=eng_notation.num_to_str(float(1e6)),
         help="Set Sampling Frequency [default=%(default)r]")
     return parser
@@ -439,6 +453,15 @@ def argument_parser():
 def main(top_block_cls=djscc_rx, options=None):
     if options is None:
         options = argument_parser().parse_args()
+
+    if options.device == "lime":
+        # swap the UHD source for a SoapySDR (LimeSDR) source; the rest of the flowgraph is unchanged
+        # NOTE: hand edit -- regenerating this file from djscc_rx.grc drops --device
+        global uhd
+        import os as _os
+        sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+        from sdr_source import uhd_compat
+        uhd = uhd_compat(options.soapy_args, options.lime_antenna)
 
     qapp = Qt.QApplication(sys.argv)
 

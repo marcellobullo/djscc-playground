@@ -133,6 +133,24 @@ blocks:
     coordinate: [264, 256.0]
     rotation: 0
     state: enabled
+- name: frame_gap
+  id: variable
+  parameters:
+    comment: 'Idle samples appended after every OFDM frame (Burst Shaper).
+
+      Back-to-back frames make the RX Schmidl-Cox trigger collide with the
+
+      header/payload demux and ~10% of frames are lost. 16 (one CP) fixes it;
+
+      0 restores the old behaviour.'
+    value: '16'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [0, 248.0]
+    rotation: 0
+    state: enabled
 - name: packet_len
   id: variable
   parameters:
@@ -470,6 +488,27 @@ blocks:
     bus_source: false
     bus_structure: null
     coordinate: [824, 768.0]
+    rotation: 0
+    state: enabled
+- name: digital_burst_shaper_xx_0
+  id: digital_burst_shaper_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: inter-frame gap
+    insert_phasing: 'False'
+    length_tag_name: length_tag_key
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    post_padding: frame_gap
+    pre_padding: '0'
+    type: complex
+    window: ([])
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1280, 896.0]
     rotation: 0
     state: enabled
 - name: digital_ofdm_cyclic_prefixer_0
@@ -1445,7 +1484,8 @@ connections:
 - [blocks_tagged_stream_mux_0, '0', virtual_sink_0_0_0, '0']
 - [digital_chunks_to_symbols_xx_0, '0', blocks_multiply_const_vxx_1, '0']
 - [digital_ofdm_carrier_allocator_cvc_0, '0', fft_vxx_0, '0']
-- [digital_ofdm_cyclic_prefixer_0, '0', blocks_multiply_const_vxx_0, '0']
+- [digital_burst_shaper_xx_0, '0', blocks_multiply_const_vxx_0, '0']
+- [digital_ofdm_cyclic_prefixer_0, '0', digital_burst_shaper_xx_0, '0']
 - [digital_packet_headergenerator_bb_0, '0', header_bits, '0']
 - [fft_vxx_0, '0', digital_ofdm_cyclic_prefixer_0, '0']
 - [virtual_source_0, '0', digital_chunks_to_symbols_xx_0, '0']

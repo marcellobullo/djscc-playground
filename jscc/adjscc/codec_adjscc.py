@@ -79,6 +79,8 @@ class AdjsccEncoderCodec(BaseEncoderCodec):
             if compressing:
                 flat = self.aligner.compress(flat.unsqueeze(0)).flatten()
             norm = powerConstraint(flat, P=self.power)
+            if self.aligner is not None and self.aligner.stage == "tx_latent":
+                norm = self.aligner.apply_tx(norm.reshape(1, self.tcn, self.h, self.w)).flatten()
 
         chn = norm.detach().cpu().numpy().astype(np.float32)
         if len(chn) % 2:

@@ -88,6 +88,8 @@ class DJSCCEncoderCodec(BaseEncoderCodec):
             if compressing:
                 latent_flat = self.aligner.compress(latent_flat.unsqueeze(0)).flatten()
             constrained = self.constraint(latent_flat.unsqueeze(0)).squeeze(0)
+            if self.aligner is not None and self.aligner.stage == "tx_latent":
+                constrained = self.aligner.apply_tx(constrained.reshape(1, self.tcn, self.h, self.w)).flatten()
 
         chn = constrained.detach().cpu().numpy().astype(np.float32)
         if len(chn) % 2:

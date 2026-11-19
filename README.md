@@ -409,6 +409,10 @@ python training/eval_aligner.py \
     --test-dir /data/kodak --channel ofdm --snr-list 0 10 20 --out-dir eval_out
 ```
 
+For a complete over-the-air test (matched-SNR ADJSCC transmitter, ConvNeXt-AWGN receiver
+with an aligner, and the four comparison runs), see
+[docs/alignment-ota.md](docs/alignment-ota.md).
+
 ## Publishing a model to HuggingFace
 
 Each model family has an exporter in `scripts/`. It turns a raw `.pth` checkpoint

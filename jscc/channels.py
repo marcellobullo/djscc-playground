@@ -66,6 +66,19 @@ def reconcile_csi(csi: torch.Tensor, need: str, n_pkts: int) -> torch.Tensor:
     return torch.cat([csi, csi[:, -1:].expand(B, n_pkts - K)], dim=1)
 
 
+class TorchAWGN(nn.Module):
+    """Plain-torch AWGN (float32, runs on MPS/CUDA/CPU). Same math as Kaira's AWGNChannel:
+    noise power = mean(z^2) / 10^(snr/10), so SNR is per real latent element (= per complex symbol)."""
+
+    def __init__(self, snr_db: float) -> None:
+        super().__init__()
+        self.snr_db = float(snr_db)
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        power = z.detach().pow(2).mean()
+        return z + torch.randn_like(z) * torch.sqrt(power / (10.0 ** (self.snr_db / 10.0)))
+
+
 class ScalarCSIChannel(nn.Module):
     """Wrap a base channel (or ``None``) so it obeys the ``(y, csi)`` contract,
     reporting the nominal commanded SNR (dB) as a scalar CSI. Used for the Kaira

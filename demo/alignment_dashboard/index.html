@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Semantic Alignment Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #0f0f0e;
+  --surface-1: #1a1a19;
+  --surface-2: #232321;
+  --border: #33332f;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #8a8980;
+  /* mode colours: first three reference slots (validated all-pairs, dark); target is a
+     neutral dashed reference so it never competes with the three that matter */
+  --matched: #3987e5;
+  --misaligned: #d95926;
+  --aligned: #199e70;
+  --target: #a3a29a;
+  --mode: var(--aligned);
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text-primary);
+  font: 14px/1.4 Inter, system-ui, sans-serif; }
+body { padding: 16px 20px 24px; max-width: 1880px; margin: 0 auto; }
+button { font: inherit; color: inherit; }
+.mono { font-family: var(--mono); }
+.muted { color: var(--text-muted); }
+
+/* ---------- header */
+header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
+header h1 { font-size: 20px; font-weight: 700; margin: 0; letter-spacing: -.01em; }
+header h1 span { color: var(--text-muted); font-weight: 500; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.chip { font: 12px var(--mono); color: var(--text-secondary); background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; }
+.chip b { color: var(--text-primary); font-weight: 600; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);
+  display: inline-block; margin-right: 6px; vertical-align: middle; transition: background .2s; }
+.busy .status-dot { background: var(--mode); box-shadow: 0 0 10px var(--mode); }
+
+/* ---------- panels */
+.panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; }
+.panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted);
+  margin: 0 0 10px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.panel h2 .right { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; }
+
+.top { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; margin-bottom: 14px; }
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; margin-bottom: 14px; }
+.bottom { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 14px; margin-bottom: 14px; }
+
+/* ---------- mode selector */
+.modes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+.mode-btn { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; text-align: left; cursor: pointer; position: relative; transition: all .15s; }
+.mode-btn:hover { border-color: var(--text-muted); }
+.mode-btn .k { position: absolute; top: 8px; right: 10px; font: 11px var(--mono); color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; }
+.mode-btn .name { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+.mode-btn .name i { width: 10px; height: 10px; border-radius: 3px; background: var(--c); display: inline-block; }
+.mode-btn .desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.mode-btn.on { border-color: var(--c); background: color-mix(in srgb, var(--c) 16%, var(--surface-2));
+  box-shadow: 0 0 0 1px var(--c) inset; }
+.mode-btn.on .desc { color: var(--text-secondary); }
+
+/* ---------- pipeline diagram */
+#pipe { width: 100%; height: auto; max-height: 230px; display: block; }
+#pipe .node rect { fill: var(--surface-2); stroke: var(--border); stroke-width: 1.5; transition: all .25s; }
+#pipe .node text { fill: var(--text-muted); font: 600 14px Inter, sans-serif; transition: fill .25s; }
+#pipe .node .sub { font: 400 11.5px var(--mono); }
+#pipe .node.on rect { stroke: var(--mode); fill: color-mix(in srgb, var(--mode) 14%, var(--surface-2)); }
+#pipe .node.on text { fill: var(--text-primary); }
+#pipe .node.on .sub { fill: var(--text-secondary); }
+#pipe .edge { fill: none; stroke: var(--border); stroke-width: 2; transition: stroke .25s; }
+#pipe .edge.on { stroke: var(--mode); stroke-width: 3; stroke-dasharray: 8 6; animation: flow .6s linear infinite; }
+#pipe .tag { font: 600 11px var(--mono); fill: var(--misaligned); opacity: 0; transition: opacity .25s; }
+#pipe .tag.on { opacity: 1; }
+#pipe .group-label { font: 600 10.5px Inter, sans-serif; fill: var(--text-muted); letter-spacing: .1em; }
+@keyframes flow { to { stroke-dashoffset: -14; } }
+@media (prefers-reduced-motion: reduce) { #pipe .edge.on { animation: none; } }
+
+/* ---------- channel controls */
+.ctrl { margin-bottom: 14px; }
+.ctrl label { display: flex; justify-content: space-between; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; }
+.ctrl label .v { font: 600 15px var(--mono); color: var(--text-primary); }
+input[type=range] { width: 100%; accent-color: var(--mode); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.btn { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px;
+  cursor: pointer; font-size: 13px; }
+.btn:hover { border-color: var(--text-muted); }
+.btn.on { border-color: var(--mode); color: var(--text-primary); background: color-mix(in srgb, var(--mode) 18%, var(--surface-2)); }
+.btn kbd { font: 11px var(--mono); color: var(--text-muted); margin-left: 4px; }
+#iq { width: 100%; max-width: 220px; margin: 0 auto; aspect-ratio: 1; background: var(--surface-2); border-radius: 10px; display: block; }
+.ch-grid { display: grid; grid-template-columns: 1fr 150px; gap: 14px; align-items: start; }
+.lost { font: 12px var(--mono); color: var(--text-muted); margin-top: 4px; }
+
+/* ---------- viewer */
+.viewer { width: min(100%, max(540px, calc((100vh - 550px) * 1.5))); margin: 0 auto; position: relative; border-radius: 10px; overflow: hidden; background: #000; aspect-ratio: 3 / 2;
+  user-select: none; }
+.viewer img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+.viewer .rec { transition: opacity .18s; }
+.viewer .orig { clip-path: inset(0 100% 0 0); }
+.viewer.wipe .orig { clip-path: inset(0 calc(100% - var(--wipe, 50%)) 0 0); }
+.viewer.show-orig .orig { clip-path: inset(0 0 0 0); }
+.viewer .handle { position: absolute; top: 0; bottom: 0; left: var(--wipe, 50%); width: 2px; background: #fff;
+  display: none; cursor: ew-resize; }
+.viewer.wipe .handle { display: block; }
+.viewer .handle::after { content: "⇆"; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  background: #fff; color: #000; border-radius: 50%; width: 30px; height: 30px; display: grid; place-items: center;
+  font-size: 15px; }
+.badge { position: absolute; padding: 5px 10px; border-radius: 8px; font: 600 13px Inter, sans-serif;
+  background: rgba(0,0,0,.62); backdrop-filter: blur(6px); }
+.badge.tl { top: 12px; left: 12px; }
+.badge.tr { top: 12px; right: 12px; }
+.badge.bl { bottom: 12px; left: 12px; font: 600 15px var(--mono); }
+.badge i { width: 10px; height: 10px; border-radius: 3px; background: var(--mode); display: inline-block; margin-right: 6px; }
+.viewer .badge.orig-badge { display: none; }
+.viewer.wipe .badge.orig-badge, .viewer.show-orig .badge.orig-badge { display: block; }
+
+.grid4 { display: none; grid-template-columns: 1fr 1fr; gap: 8px; width: min(100%, max(540px, calc((100vh - 550px) * 1.5))); margin: 0 auto; }
+.grid4 .cell { position: relative; border-radius: 8px; overflow: hidden; background: #000; aspect-ratio: 3/2;
+  border: 2px solid transparent; cursor: pointer; }
+.grid4 .cell.on { border-color: var(--c); }
+.grid4 img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.grid4 .badge { font-size: 12px; }
+.grid4 .badge i { background: var(--c); }
+.is-grid .viewer { display: none; } .is-grid .grid4 { display: grid; }
+.viewer-tools { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+/* ---------- metrics */
+.hero { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.stat { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
+.stat .lbl { font-size: 12px; color: var(--text-muted); }
+.stat .val { font: 600 32px var(--mono); letter-spacing: -.02em; }
+.stat .val small { font-size: 14px; color: var(--text-muted); font-weight: 400; margin-left: 2px; }
+.stat .delta { font: 12px var(--mono); color: var(--text-secondary); }
+.bars { display: grid; gap: 8px; margin-bottom: 16px; }
+.bar { display: grid; grid-template-columns: 82px 1fr 64px; align-items: center; gap: 8px; cursor: pointer; }
+.bar .n { font-size: 13px; color: var(--text-secondary); }
+.bar .track { height: 18px; position: relative; }
+.bar .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--c); border-radius: 0 4px 4px 0;
+  transition: width .35s cubic-bezier(.2,.8,.2,1), opacity .2s; opacity: .45; }
+.bar.target .fill { background: repeating-linear-gradient(135deg, var(--c) 0 4px, transparent 4px 7px); border: 1px solid var(--c); }
+.bar.on .fill { opacity: 1; }
+.bar .v { font: 600 13px var(--mono); text-align: right; }
+.arr { background: var(--surface-2); border-radius: 10px; padding: 12px; }
+.arr .big { font: 600 34px var(--mono); color: var(--text-primary); }
+.arr .meter { height: 10px; background: var(--surface-1); border-radius: 5px; position: relative; margin: 8px 0 6px;
+  overflow: hidden; }
+.arr .meter .f { position: absolute; left: 0; top: 0; bottom: 0; background: var(--aligned); border-radius: 0 4px 4px 0;
+  transition: width .4s; }
+.arr .scale { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); }
+
+/* ---------- latents */
+.latents { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.latent { margin: 0; }
+.latent img { width: 100%; border-radius: 6px; display: block; background: var(--surface-2); image-rendering: pixelated; }
+.latent figcaption { font-size: 12px; color: var(--text-secondary); margin-top: 6px; }
+.latent figcaption b { font: 600 12px var(--mono); color: var(--text-primary); display: block; }
+.legend-div { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-muted); margin-top: 10px; }
+.legend-div .grad { width: 120px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, #3987e5, #282826, #e66767); }
+
+/* ---------- sweep chart */
+#sweep { width: 100%; height: 280px; display: block; }
+#sweep .grid line { stroke: var(--border); stroke-width: 1; }
+#sweep .axis text { fill: var(--text-muted); font: 11px var(--mono); }
+#sweep .ln { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; transition: opacity .2s; }
+#sweep .lbl { font: 600 12px Inter, sans-serif; fill: var(--text-secondary); }
+#sweep .cur { stroke: var(--text-muted); stroke-dasharray: 3 3; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 14px; height: 3px; background: var(--c); border-radius: 2px; display: inline-block; }
+.legend i.dash { background: repeating-linear-gradient(90deg, var(--c) 0 4px, transparent 4px 7px); }
+.tip { position: fixed; pointer-events: none; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px; display: none; z-index: 10; min-width: 150px; }
+.tip .r { display: flex; justify-content: space-between; gap: 12px; }
+.tip .r i { width: 8px; height: 8px; border-radius: 2px; background: var(--c); display: inline-block; margin-right: 6px; }
+.tip .r b { font-family: var(--mono); }
+.empty { color: var(--text-muted); font-size: 13px; height: 280px; display: grid; place-items: center; text-align: center; }
+
+/* ---------- gallery */
+.gallery { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; }
+.gallery .t { flex: 0 0 auto; width: 120px; aspect-ratio: 3/2; border-radius: 6px; overflow: hidden; cursor: pointer;
+  border: 2px solid transparent; background: var(--surface-2); position: relative; }
+.gallery .t img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gallery .t.on { border-color: var(--mode); }
+.gallery .t span { position: absolute; bottom: 2px; left: 4px; font: 10px var(--mono); text-shadow: 0 0 3px #000; }
+#cam { display: none; }
+
+.keys { font-size: 12px; color: var(--text-muted); margin-top: 10px; display: flex; gap: 14px; flex-wrap: wrap; }
+.keys kbd { font: 11px var(--mono); color: var(--text-secondary); border: 1px solid var(--border); border-radius: 4px;
+  padding: 0 5px; margin-right: 4px; }
+body.minimal .keys { display: none; }
+
+@media (max-width: 1100px) {
+  .top, .main, .bottom { grid-template-columns: minmax(0, 1fr); }
+  .modes { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 600px) {
+  body { padding: 12px 16px; }
+  .latents { grid-template-columns: 1fr; }
+  .ch-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Semantic alignment <span>· live</span></h1>
+  <div class="chips" id="chips"></div>
+</header>
+
+<!-- ============ pipeline + channel -->
+<section class="top">
+  <div class="panel">
+    <h2>Receiver <span class="right muted" id="mode-hint"></span></h2>
+    <div class="modes" id="modes"></div>
+    <svg id="pipe" viewBox="0 0 1000 250" role="img" aria-label="Transmission pipeline">
+      <text class="group-label" x="40" y="14">TRANSMITTER</text>
+      <text class="group-label" x="352" y="14">CHANNEL</text>
+      <text class="group-label" x="796" y="14">RECEIVER</text>
+      <path class="edge" id="e-encA" d="M215,58 C260,58 260,116 300,116"/>
+      <path class="edge" id="e-encB" d="M215,176 C260,176 260,116 300,116"/>
+      <path class="edge" id="e-decA" d="M470,116 C620,116 640,58 790,58"/>
+      <path class="edge" id="e-al-in" d="M470,116 C520,116 520,176 560,176"/>
+      <path class="edge" id="e-al-out" d="M700,176 L790,176"/>
+      <path class="edge" id="e-bypass" d="M470,116 C520,116 520,222 630,222 C740,222 750,176 790,176"/>
+      <g class="node" id="n-encA"><rect x="40" y="30" width="175" height="56" rx="10"/>
+        <text x="56" y="54">ADJSCC encoder</text><text class="sub" x="56" y="73">matched-SNR · TX</text></g>
+      <g class="node" id="n-encB"><rect x="40" y="148" width="175" height="56" rx="10"/>
+        <text x="56" y="172">ConvNeXt encoder</text><text class="sub" x="56" y="191">AWGN · target only</text></g>
+      <g class="node" id="n-ch"><rect x="300" y="88" width="170" height="56" rx="10"/>
+        <text x="316" y="112" id="ch-title">AWGN channel</text><text class="sub" x="316" y="131" id="ch-sub">SNR 20 dB</text></g>
+      <g class="node" id="n-al"><rect x="560" y="148" width="140" height="56" rx="10"/>
+        <text x="576" y="172">Aligner</text><text class="sub" x="576" y="191" id="al-sub">conv 5×5</text></g>
+      <g class="node" id="n-decA"><rect x="790" y="30" width="175" height="56" rx="10"/>
+        <text x="806" y="54">ADJSCC decoder</text><text class="sub" x="806" y="73">source model</text></g>
+      <g class="node" id="n-decB"><rect x="790" y="148" width="175" height="56" rx="10"/>
+        <text x="806" y="172">ConvNeXt decoder</text><text class="sub" x="806" y="191">AWGN · different model</text></g>
+      <text class="tag" id="tag-mis" x="630" y="246" text-anchor="middle">no aligner: latent spaces don't match</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <h2>Channel <span class="right mono" id="ch-name"></span></h2>
+    <div class="ch-grid">
+      <div>
+        <div class="ctrl">
+          <label for="snr">SNR <span class="v" id="snr-v">20 dB</span></label>
+          <input type="range" id="snr" min="0" max="30" step="1" value="20">
+        </div>
+        <div class="ctrl">
+          <label for="drop">Lost packets <span class="v" id="drop-v">0 %</span></label>
+          <input type="range" id="drop" min="0" max="30" step="1" value="0">
+          <div class="lost" id="lost">&nbsp;</div>
+        </div>
+        <div class="row">
+          <button class="btn" id="reseed">New noise <kbd>Space</kbd></button>
+          <span class="mono muted" id="seed-v" style="font-size:12px">seed 0</span>
+        </div>
+      </div>
+      <div>
+        <canvas id="iq" width="300" height="300" aria-label="Received constellation"></canvas>
+        <div class="muted" style="font-size:11px;margin-top:4px;text-align:center">received symbols (I/Q)</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ viewer + metrics -->
+<section class="main">
+  <div class="panel" id="viewer-panel">
+    <h2>Reconstruction <span class="right mono" id="img-name"></span></h2>
+    <div class="viewer" id="viewer">
+      <img class="rec" id="rec" alt="reconstruction">
+      <img class="orig" id="orig" alt="original">
+      <div class="handle" id="handle"></div>
+      <div class="badge tl"><i></i><span id="v-mode">—</span></div>
+      <div class="badge tr orig-badge">Original</div>
+      <div class="badge bl" id="v-psnr">—</div>
+    </div>
+    <div class="grid4" id="grid4"></div>
+    <div class="viewer-tools">
+      <button class="btn" id="b-wipe">Compare with original <kbd>C</kbd></button>
+      <button class="btn" id="b-grid">All four <kbd>G</kbd></button>
+      <button class="btn" id="b-hold">Hold for original <kbd>O</kbd></button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Quality on this image</h2>
+    <div class="hero">
+      <div class="stat"><div class="lbl">PSNR</div><div class="val" id="h-psnr">—<small>dB</small></div><div class="delta" id="h-psnr-d">&nbsp;</div></div>
+      <div class="stat"><div class="lbl">SSIM</div><div class="val" id="h-ssim">—</div><div class="delta" id="h-ssim-d">&nbsp;</div></div>
+    </div>
+    <div class="bars" id="bars"></div>
+    <div class="arr">
+      <div class="lbl muted" style="font-size:12px">Alignment recovery ratio (PSNR)</div>
+      <div class="big" id="arr-v">—</div>
+      <div class="meter"><div class="f" id="arr-f" style="width:0"></div></div>
+      <div class="scale"><span>misaligned</span><span>target ceiling</span></div>
+      <div class="muted" style="font-size:11.5px;margin-top:8px">ARR = (aligned − misaligned) / (target − misaligned)</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ latents + sweep -->
+<section class="bottom">
+  <div class="panel">
+    <h2>What the decoder receives <span class="right muted" style="font-size:12px">first 8 of 16 latent channels</span></h2>
+    <div class="latents">
+      <figure class="latent"><img id="lat-rx" alt="received latent"><figcaption><b id="lat-rx-d">—</b>received (ADJSCC space)</figcaption></figure>
+      <figure class="latent"><img id="lat-al" alt="aligned latent"><figcaption><b id="lat-al-d">—</b>after the aligner</figcaption></figure>
+      <figure class="latent"><img id="lat-tg" alt="ConvNeXt latent"><figcaption><b>reference</b>ConvNeXt's own latent</figcaption></figure>
+    </div>
+    <div class="legend-div"><span>−</span><span class="grad"></span><span>+</span>
+      <span style="margin-left:auto">NMSE to ConvNeXt's own latent (lower = closer)</span></div>
+  </div>
+
+  <div class="panel">
+    <h2>PSNR vs SNR on this image <span class="right"><button class="btn" id="b-sweep">Run sweep <kbd>S</kbd></button></span></h2>
+    <div class="legend" id="sweep-legend"></div>
+    <div id="sweep-wrap"><div class="empty">Press <b>S</b> to sweep 0–30 dB with the current image, noise and lost packets.</div></div>
+  </div>
+</section>
+
+<!-- ============ gallery -->
+<section class="panel">
+  <h2>Image <span class="right row">
+    <button class="btn" id="b-upload">Upload…</button>
+    <button class="btn" id="b-cam">Live camera <kbd>L</kbd></button>
+    <input type="file" id="file" accept="image/*" hidden>
+  </span></h2>
+  <div class="gallery" id="gallery"></div>
+  <video id="cam" playsinline muted></video>
+  <div class="keys">
+    <span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd>receiver</span>
+    <span><kbd>A</kbd>aligner on / off</span>
+    <span><kbd>↑</kbd><kbd>↓</kbd>SNR</span>
+    <span><kbd>←</kbd><kbd>→</kbd>image</span>
+    <span><kbd>Space</kbd>new noise</span>
+    <span><kbd>C</kbd>compare</span><span><kbd>G</kbd>all four</span><span><kbd>O</kbd>original</span>
+    <span><kbd>S</kbd>sweep</span><span><kbd>L</kbd>camera</span><span><kbd>H</kbd>hide this line</span>
+  </div>
+</section>
+
+<div class="tip" id="tip"></div>
+
+<script>
+const MODES = {
+  matched:    { label: "Matched",    key: "1", c: "var(--matched)",    hex: "#3987e5",
+                desc: "ADJSCC → ADJSCC", hint: "same model on both ends" },
+  misaligned: { label: "Misaligned", key: "2", c: "var(--misaligned)", hex: "#d95926",
+                desc: "ADJSCC → ConvNeXt", hint: "different decoder, no aligner" },
+  aligned:    { label: "Aligned",    key: "3", c: "var(--aligned)",    hex: "#199e70",
+                desc: "ADJSCC → aligner → ConvNeXt", hint: "5×5 conv on the received latent" },
+  target:     { label: "Target",     key: "4", c: "var(--target)",     hex: "#a3a29a",
+                desc: "ConvNeXt → ConvNeXt", hint: "ceiling for the aligned run" },
+};
+const ORDER = ["matched", "misaligned", "aligned", "target"];
+const ROUTES = {
+  matched:    { nodes: ["encA", "ch", "decA"],       edges: ["encA", "decA"] },
+  misaligned: { nodes: ["encA", "ch", "decB"],       edges: ["encA", "bypass"] },
+  aligned:    { nodes: ["encA", "ch", "al", "decB"], edges: ["encA", "al-in", "al-out"] },
+  target:     { nodes: ["encB", "ch", "decB"],       edges: ["encB", "bypass"] },
+};
+
+const $ = (id) => document.getElementById(id);
+const S = { mode: "misaligned", image: "0", snr: 20, drop: 0, seed: 0, data: null, sweep: null,
+            images: [], info: null, cam: false };
+try { const m = localStorage.getItem("al-mode"); if (MODES[m]) S.mode = m; } catch (e) {}
+
+// ------------------------------------------------------------------ init
+async function init() {
+  S.info = await (await fetch("/api/info")).json();
+  const i = S.info;
+  $("chips").innerHTML = [
+    `TX <b>${short(i.src)}</b>`, `RX <b>${short(i.tgt)}</b>`, `aligner <b>${i.aligner_kind}</b>`,
+    `latent <b>${i.latent.join("×")}</b>`, `<span class="status-dot"></span>${i.device}`,
+  ].map((h) => `<span class="chip">${h}</span>`).join("");
+  $("ch-name").textContent = i.channel.toUpperCase();
+  $("ch-title").textContent = `${i.channel.toUpperCase()} channel`;
+  $("al-sub").textContent = i.aligner_kind === "conv" ? "conv 5×5" : i.aligner_kind;
+
+  $("modes").innerHTML = ORDER.map((m) => `
+    <button class="mode-btn" data-m="${m}" style="--c:${MODES[m].c}">
+      <span class="k">${MODES[m].key}</span>
+      <div class="name"><i></i>${MODES[m].label}</div>
+      <div class="desc">${MODES[m].desc}</div>
+    </button>`).join("");
+  $("modes").onclick = (e) => { const b = e.target.closest(".mode-btn"); if (b) setMode(b.dataset.m); };
+
+  $("bars").innerHTML = ORDER.map((m) => `
+    <div class="bar ${m}" data-m="${m}" style="--c:${MODES[m].c}">
+      <span class="n">${MODES[m].label}</span><div class="track"><div class="fill" style="width:0"></div></div>
+      <span class="v">—</span></div>`).join("");
+  $("bars").onclick = (e) => { const b = e.target.closest(".bar"); if (b) setMode(b.dataset.m); };
+
+  $("grid4").innerHTML = ORDER.map((m) => `
+    <div class="cell" data-m="${m}" style="--c:${MODES[m].c}"><img alt="${m}">
+      <div class="badge tl"><i></i>${MODES[m].label}</div><div class="badge bl"></div></div>`).join("");
+  $("grid4").onclick = (e) => { const c = e.target.closest(".cell"); if (c) setMode(c.dataset.m); };
+
+  $("sweep-legend").innerHTML = ORDER.map((m) =>
+    `<span style="--c:${MODES[m].c}"><i class="${m === "target" ? "dash" : ""}"></i>${MODES[m].label}</span>`).join("");
+
+  S.images = i.images.map((x) => ({ ...x, thumb: `/api/thumb/${x.id}` }));
+  renderGallery();
+  bindControls();
+  setMode(S.mode, true);
+  if (S.images.length) selectImage(S.images[0].id);
+}
+const short = (s) => s.split("/").filter(Boolean).slice(-2).join("/").replace("adjscc-matched-snr-final/best", "adjscc-matched-snr");
+
+// ------------------------------------------------------------------ mode
+function setMode(m, quiet) {
+  S.mode = m;
+  try { localStorage.setItem("al-mode", m); } catch (e) {}
+  document.documentElement.style.setProperty("--mode", MODES[m].c);
+  document.querySelectorAll(".mode-btn").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
+  document.querySelectorAll(".bar").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
+  document.querySelectorAll(".grid4 .cell").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
+  const r = ROUTES[m];
+  document.querySelectorAll("#pipe .node").forEach((n) => n.classList.toggle("on", r.nodes.includes(n.id.slice(2))));
+  document.querySelectorAll("#pipe .edge").forEach((e) => e.classList.toggle("on", r.edges.includes(e.id.slice(2))));
+  $("tag-mis").classList.toggle("on", m === "misaligned");
+  $("mode-hint").textContent = MODES[m].hint;
+  $("v-mode").textContent = MODES[m].label;
+  if (!quiet) renderResult();
+}
+
+// ------------------------------------------------------------------ requests
+let reqId = 0, timer = null;
+function schedule(delay = 90) { clearTimeout(timer); timer = setTimeout(run, delay); }
+async function run() {
+  const id = ++reqId;
+  document.body.classList.add("busy");
+  try {
+    const res = await fetch("/api/run", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ image: S.image, snr: S.snr, drop: S.drop / 100, seed: S.seed }) });
+    const d = await res.json();
+    if (id !== reqId) return;
+    S.data = d;
+    renderResult();
+  } finally { if (id === reqId) document.body.classList.remove("busy"); }
+  return id;
+}
+
+// ------------------------------------------------------------------ render
+const f2 = (x) => x.toFixed(2), f3 = (x) => x.toFixed(3);
+function renderResult() {
+  const d = S.data; if (!d) return;
+  const m = S.mode, met = d.metrics[m];
+  const rec = $("rec");
+  if (rec.dataset.src !== d.images[m]) { rec.src = d.images[m]; rec.dataset.src = d.images[m]; }
+  $("orig").src = d.original;
+  $("v-psnr").textContent = `${f2(met.psnr)} dB · SSIM ${f3(met.ssim)}`;
+
+  $("h-psnr").innerHTML = `${met.psnr.toFixed(1)}<small>dB</small>`;
+  $("h-ssim").textContent = f3(met.ssim);
+  const ref = m === "misaligned" ? null : d.metrics.misaligned;
+  $("h-psnr-d").textContent = ref ? `${sign(met.psnr - ref.psnr)} dB vs misaligned` : "lower bound";
+  $("h-ssim-d").textContent = ref ? `${sign(met.ssim - ref.ssim, 3)} vs misaligned` : " ";
+
+  const max = Math.max(45, ...ORDER.map((k) => d.metrics[k].psnr));
+  document.querySelectorAll(".bar").forEach((b) => {
+    const v = d.metrics[b.dataset.m].psnr;
+    b.querySelector(".fill").style.width = `${(v / max) * 100}%`;
+    b.querySelector(".v").textContent = `${v.toFixed(1)} dB`;
+  });
+  const { aligned: a, misaligned: mi, target: t } = d.metrics;
+  const arr = (a.psnr - mi.psnr) / (t.psnr - mi.psnr);
+  $("arr-v").textContent = isFinite(arr) ? `${Math.round(arr * 100)} %` : "—";
+  $("arr-f").style.width = `${Math.max(0, Math.min(1, arr)) * 100}%`;
+
+  document.querySelectorAll(".grid4 .cell").forEach((c) => {
+    const k = c.dataset.m;
+    c.querySelector("img").src = d.images[k];
+    c.querySelector(".bl").textContent = `${f2(d.metrics[k].psnr)} dB`;
+  });
+
+  $("lat-rx").src = d.latent_maps.rx; $("lat-al").src = d.latent_maps.aligned; $("lat-tg").src = d.latent_maps.target;
+  $("lat-rx-d").textContent = `${d.latent.rx_db.toFixed(1)} dB`;
+  $("lat-al-d").textContent = `${d.latent.aligned_db.toFixed(1)} dB`;
+
+  $("lost").textContent = d.lost ? `${d.lost} of ${d.n_pkts} packets lost` : `${d.n_pkts} packets, none lost`;
+  drawIQ(d.iq);
+  if (S.sweep) drawSweep();
+}
+const sign = (x, n = 2) => (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(n);
+
+function drawIQ(iq) {
+  const c = $("iq"), g = c.getContext("2d"), W = c.width, s = W / 7;
+  g.clearRect(0, 0, W, W);
+  g.strokeStyle = "#33332f"; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(W / 2, 0); g.lineTo(W / 2, W); g.moveTo(0, W / 2); g.lineTo(W, W / 2); g.stroke();
+  g.fillStyle = "rgba(195,194,183,.20)";
+  for (const [x, y] of iq.tx) g.fillRect(W / 2 + x * s - 1, W / 2 - y * s - 1, 2, 2);
+  g.fillStyle = MODES[S.mode].hex + "cc";
+  for (const [x, y] of iq.rx) { g.beginPath(); g.arc(W / 2 + x * s, W / 2 - y * s, 1.6, 0, 7); g.fill(); }
+}
+
+// ------------------------------------------------------------------ sweep chart
+async function runSweep() {
+  $("b-sweep").textContent = "Sweeping…"; $("b-sweep").disabled = true;
+  try {
+    const res = await fetch("/api/sweep", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ image: S.image, drop: S.drop / 100, seed: S.seed }) });
+    S.sweep = await res.json();
+    S.sweep.key = sweepKey();
+    drawSweep();
+  } finally { $("b-sweep").innerHTML = "Run sweep <kbd>S</kbd>"; $("b-sweep").disabled = false; }
+}
+const sweepKey = () => `${S.image}|${S.drop}|${S.seed}`;
+
+function drawSweep() {
+  const sw = S.sweep, wrap = $("sweep-wrap");
+  const W = Math.max(320, wrap.clientWidth), H = 280, P = { l: 40, r: 90, t: 10, b: 44 };
+  const xs = sw.snr, all = ORDER.flatMap((m) => sw.psnr[m]);
+  const y0 = Math.floor(Math.min(...all) / 5) * 5, y1 = Math.ceil(Math.max(...all) / 5) * 5;
+  const X = (v) => P.l + (v - xs[0]) / (xs.at(-1) - xs[0]) * (W - P.l - P.r);
+  const Y = (v) => P.t + (1 - (v - y0) / (y1 - y0)) * (H - P.t - P.b);
+  let s = `<svg id="sweep" viewBox="0 0 ${W} ${H}" role="img" aria-label="PSNR versus SNR">`;
+  s += `<g class="grid">`;
+  for (let v = y0; v <= y1; v += 5) s += `<line x1="${P.l}" x2="${W - P.r}" y1="${Y(v)}" y2="${Y(v)}"/>`;
+  s += `</g><g class="axis">`;
+  for (let v = y0; v <= y1; v += 5) s += `<text x="${P.l - 6}" y="${Y(v) + 4}" text-anchor="end">${v}</text>`;
+  for (let v = 0; v <= 30; v += 5) s += `<text x="${X(v)}" y="${H - P.b + 18}" text-anchor="middle">${v}</text>`;
+  s += `<text x="${(P.l + W - P.r) / 2}" y="${H - 4}" text-anchor="middle">SNR (dB)</text></g>`;
+  const stale = sw.key !== sweepKey();
+  if (!stale) s += `<line class="cur" x1="${X(S.snr)}" x2="${X(S.snr)}" y1="${P.t}" y2="${H - P.b}"/>`;
+  // Direct labels at the right end, nudged apart so they never collide.
+  const ends = ORDER.map((m) => ({ m, y: Y(sw.psnr[m].at(-1)) })).sort((a, b) => a.y - b.y);
+  for (let i = 1; i < ends.length; i++) ends[i].y = Math.max(ends[i].y, ends[i - 1].y + 15);
+  for (const m of ORDER) {
+    const pts = xs.map((x, i) => `${X(x)},${Y(sw.psnr[m][i])}`).join(" ");
+    const op = m === S.mode ? 1 : 0.55;
+    s += `<polyline class="ln" points="${pts}" stroke="${MODES[m].hex}" opacity="${op}" ${m === "target" ? 'stroke-dasharray="6 4"' : ""} ${m === S.mode ? 'stroke-width="3"' : ""}/>`;
+    if (!stale) {
+      const i = xs.indexOf(S.snr);
+      if (i >= 0) s += `<circle cx="${X(S.snr)}" cy="${Y(sw.psnr[m][i])}" r="4.5" fill="${MODES[m].hex}" stroke="#1a1a19" stroke-width="2"/>`;
+    }
+  }
+  for (const e of ends) s += `<text class="lbl" x="${W - P.r + 8}" y="${e.y + 4}">${MODES[e.m].label}</text>`;
+  s += `<rect id="sweep-hit" x="${P.l}" y="${P.t}" width="${W - P.l - P.r}" height="${H - P.t - P.b}" fill="transparent"/>`;
+  s += `<line id="sweep-x" y1="${P.t}" y2="${H - P.b}" stroke="#8a8980" stroke-width="1" visibility="hidden"/>`;
+  s += `</svg>`;
+  wrap.innerHTML = s + (stale ? `<div class="muted" style="font-size:12px">image / noise / loss changed since this sweep — press S to refresh</div>` : "");
+
+  const hit = $("sweep-hit"), tip = $("tip"), vx = $("sweep-x"), svg = $("sweep");
+  hit.onmousemove = (ev) => {
+    const r = svg.getBoundingClientRect(), px = (ev.clientX - r.left) * (W / r.width);
+    let i = 0, best = 1e9;
+    xs.forEach((x, k) => { const dd = Math.abs(X(x) - px); if (dd < best) { best = dd; i = k; } });
+    vx.setAttribute("x1", X(xs[i])); vx.setAttribute("x2", X(xs[i])); vx.setAttribute("visibility", "visible");
+    tip.innerHTML = `<div class="muted" style="margin-bottom:4px">SNR ${xs[i]} dB</div>` +
+      ORDER.map((m) => `<div class="r" style="--c:${MODES[m].hex}"><span><i></i>${MODES[m].label}</span><b>${sw.psnr[m][i].toFixed(1)} dB</b></div>`).join("");
+    tip.style.display = "block";
+    const tx = ev.clientX + 16, tw = tip.offsetWidth;
+    tip.style.left = `${tx + tw > innerWidth ? ev.clientX - tw - 16 : tx}px`;
+    tip.style.top = `${ev.clientY - 20}px`;
+  };
+  hit.onmouseleave = () => { tip.style.display = "none"; vx.setAttribute("visibility", "hidden"); };
+  hit.onclick = (ev) => {
+    const r = svg.getBoundingClientRect(), px = (ev.clientX - r.left) * (W / r.width);
+    const v = Math.round(Math.max(0, Math.min(30, xs[0] + (px - P.l) / (W - P.l - P.r) * 30)));
+    setSnr(v);
+  };
+}
+
+// ------------------------------------------------------------------ gallery / images
+function renderGallery() {
+  $("gallery").innerHTML = S.images.map((x) =>
+    `<div class="t ${x.id === S.image ? "on" : ""}" data-id="${x.id}"><img src="${x.thumb}" alt="" loading="lazy"><span>${x.name}</span></div>`).join("");
+}
+function selectImage(id) {
+  S.image = id;
+  const x = S.images.find((i) => i.id === id);
+  $("img-name").textContent = x ? x.name : id;
+  document.querySelectorAll(".gallery .t").forEach((t) => t.classList.toggle("on", t.dataset.id === id));
+  const el = document.querySelector(`.gallery .t[data-id="${id}"]`), gal = $("gallery");
+  if (el) gal.scrollTo({ left: el.offsetLeft - gal.offsetLeft - gal.clientWidth / 2 + el.clientWidth / 2, behavior: "smooth" });
+  schedule(0);
+}
+function stepImage(k) {
+  const list = S.images; if (!list.length) return;
+  const i = list.findIndex((x) => x.id === S.image);
+  selectImage(list[(i + k + list.length) % list.length].id);
+}
+async function uploadBlob(blob, name, slot = "") {
+  const fd = new FormData(); fd.append("file", blob, name);
+  const r = await (await fetch(`/api/upload${slot ? "?slot=" + slot : ""}`, { method: "POST", body: fd })).json();
+  return r.id;
+}
+
+// ------------------------------------------------------------------ camera (live loop)
+let camStream = null;
+async function toggleCam() {
+  if (S.cam) { S.cam = false; camStream?.getTracks().forEach((t) => t.stop()); $("b-cam").classList.remove("on"); return; }
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+  } catch (e) { alert("Camera unavailable: " + e.message + "\n(Browsers allow the camera only on localhost or https.)"); return; }
+  const v = $("cam"); v.srcObject = camStream; await v.play();
+  S.cam = true; $("b-cam").classList.add("on");
+  if (!S.images.find((x) => x.id === "ucam")) {
+    S.images.unshift({ id: "ucam", name: "camera", thumb: "" }); renderGallery();
+  }
+  $("img-name").textContent = "live camera";
+  camLoop();
+}
+async function camLoop() {
+  const v = $("cam"), c = document.createElement("canvas");
+  c.width = 768; c.height = 512;
+  const g = c.getContext("2d");
+  while (S.cam) {
+    const r = Math.max(c.width / v.videoWidth, c.height / v.videoHeight);
+    const w = v.videoWidth * r, h = v.videoHeight * r;
+    g.drawImage(v, (c.width - w) / 2, (c.height - h) / 2, w, h);
+    const blob = await new Promise((res) => c.toBlob(res, "image/jpeg", 0.92));
+    await uploadBlob(blob, "camera.jpg", "cam");
+    const t = document.querySelector('.gallery .t[data-id="ucam"] img'); if (t) t.src = c.toDataURL("image/jpeg", 0.6);
+    S.image = "ucam";
+    document.querySelectorAll(".gallery .t").forEach((t) => t.classList.toggle("on", t.dataset.id === "ucam"));
+    clearTimeout(timer); await run();
+  }
+}
+
+// ------------------------------------------------------------------ controls
+function setSnr(v) {
+  S.snr = Math.max(0, Math.min(30, v)); $("snr").value = S.snr;
+  $("snr-v").textContent = `${S.snr} dB`; $("ch-sub").textContent = `SNR ${S.snr} dB`;
+  if (!S.cam) schedule();
+}
+function setWipe(px) {
+  const r = $("viewer").getBoundingClientRect();
+  $("viewer").style.setProperty("--wipe", `${Math.max(0, Math.min(100, (px - r.left) / r.width * 100))}%`);
+}
+function bindControls() {
+  $("snr").oninput = (e) => setSnr(+e.target.value);
+  $("drop").oninput = (e) => { S.drop = +e.target.value; $("drop-v").textContent = `${S.drop} %`; if (!S.cam) schedule(); };
+  $("reseed").onclick = () => { S.seed++; $("seed-v").textContent = `seed ${S.seed}`; if (!S.cam) schedule(0); };
+  $("b-sweep").onclick = runSweep;
+  $("b-wipe").onclick = () => { $("viewer").classList.toggle("wipe"); $("b-wipe").classList.toggle("on"); };
+  $("b-grid").onclick = () => { $("viewer-panel").classList.toggle("is-grid"); $("b-grid").classList.toggle("on"); };
+  const hold = (on) => $("viewer").classList.toggle("show-orig", on);
+  $("b-hold").onpointerdown = () => hold(true);
+  ["pointerup", "pointerleave"].forEach((ev) => $("b-hold").addEventListener(ev, () => hold(false)));
+  $("gallery").onclick = (e) => {
+    const t = e.target.closest(".t"); if (!t) return;
+    if (t.dataset.id === "ucam") { if (!S.cam) toggleCam(); return; }
+    if (S.cam) toggleCam();
+    selectImage(t.dataset.id);
+  };
+  $("b-upload").onclick = () => $("file").click();
+  $("file").onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    if (S.cam) toggleCam();
+    const id = await uploadBlob(f, f.name);
+    S.images.unshift({ id, name: f.name.replace(/\.[^.]+$/, ""), thumb: URL.createObjectURL(f) });
+    renderGallery(); selectImage(id);
+  };
+  $("b-cam").onclick = toggleCam;
+
+  let drag = false;
+  $("viewer").onpointerdown = (e) => { if ($("viewer").classList.contains("wipe")) { drag = true; setWipe(e.clientX); $("viewer").setPointerCapture(e.pointerId); } };
+  $("viewer").onpointermove = (e) => { if (drag) setWipe(e.clientX); };
+  $("viewer").onpointerup = () => { drag = false; };
+
+  addEventListener("keydown", (e) => {
+    if (e.target.tagName === "INPUT" && e.target.type !== "range") return;
+    const k = e.key.toLowerCase();
+    const byKey = ORDER.find((m) => MODES[m].key === k);
+    if (byKey) return setMode(byKey);
+    if (k === "a") return setMode(S.mode === "aligned" ? "misaligned" : "aligned");
+    if (k === " ") { e.preventDefault(); return $("reseed").click(); }
+    if (k === "arrowup") { e.preventDefault(); return setSnr(S.snr + 1); }
+    if (k === "arrowdown") { e.preventDefault(); return setSnr(S.snr - 1); }
+    if (k === "arrowright") { e.preventDefault(); if (S.cam) toggleCam(); return stepImage(1); }
+    if (k === "arrowleft") { e.preventDefault(); if (S.cam) toggleCam(); return stepImage(-1); }
+    if (k === "c") return $("b-wipe").click();
+    if (k === "g") return $("b-grid").click();
+    if (k === "o" && !e.repeat) return hold(true);
+    if (k === "s") return runSweep();
+    if (k === "l") return toggleCam();
+    if (k === "h") return document.body.classList.toggle("minimal");
+  });
+  addEventListener("keyup", (e) => { if (e.key.toLowerCase() === "o") hold(false); });
+  addEventListener("resize", () => { if (S.sweep) drawSweep(); });
+}
+
+init();
+</script>
+</body>
+</html>

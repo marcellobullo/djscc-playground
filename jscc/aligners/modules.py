@@ -121,6 +121,27 @@ class _TwoConvAlignment(nn.Module):
         return x
 
 
+class _ResCNNAlignment(nn.Module):
+    """Linear 5x5 conv path (same as the ``conv`` aligner) plus a small nonlinear
+    residual branch: ``y = conv(x) + body(x)``. The last layer of the branch starts at
+    zero, so a warm start from a trained ``conv`` aligner (``linear.*`` keys) begins
+    exactly at that aligner and training can only add to it."""
+
+    def __init__(self, channels, hidden=64):
+        super().__init__()
+        self.linear = nn.Conv2d(channels, channels, 5, padding=2)
+        self.body = nn.Sequential(
+            nn.Conv2d(channels, hidden, 5, padding=2), nn.PReLU(hidden),
+            nn.Conv2d(hidden, hidden, 3, padding=1), nn.PReLU(hidden),
+            nn.Conv2d(hidden, hidden, 3, padding=1), nn.PReLU(hidden),
+            nn.Conv2d(hidden, channels, 5, padding=2))
+        nn.init.zeros_(self.body[-1].weight)
+        nn.init.zeros_(self.body[-1].bias)
+
+    def forward(self, x):
+        return self.linear(x) + self.body(x)
+
+
 class _ZeroShotAlignment(nn.Module):
     """Zero-shot (training-free) aligner using SVD/Parseval bases + whitening.
 
@@ -160,6 +181,8 @@ class _ZeroShotAlignment(nn.Module):
 # ---------------------------------------------------------------------------
 def _infer_kind(name: str) -> str:
     name = name.lower()
+    if "rescnn" in name:
+        return "rescnn"
     if "twoconv" in name:
         return "twoconv"
     if "conv" in name:
@@ -204,6 +227,8 @@ def load_aligner(path: str, tcn: int, h: int, w: int, device="cpu",
     elif kind == "conv":
         aligner = _ConvolutionalAlignment(in_channels=tcn, out_channels=tcn,
                                           kernel_size=5)
+    elif kind == "rescnn":
+        aligner = _ResCNNAlignment(tcn)
     elif kind == "zeroshot":
         if n_samples is None:
             match = re.search(r"_(\d+)\.pth$", os.path.basename(path))

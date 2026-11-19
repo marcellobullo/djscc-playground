@@ -28,18 +28,40 @@ from ..djscc.codec_djscc import _pick_device
 from . import modules as _m
 
 
-class Aligner(BaseAligner):
-    """Thin wrapper exposing a loaded aligner module through the BaseAligner API."""
+def tx_power_match(z_out, z_in):
+    """Rescale each image of a TX-side aligner's output to the power of its input latent, so a
+    transmitter aligner never changes the transmit power budget."""
+    p_in = z_in.detach().pow(2).flatten(1).mean(1)
+    p_out = z_out.pow(2).flatten(1).mean(1).clamp_min(1e-12)
+    return z_out * torch.sqrt(p_in / p_out).view(-1, *([1] * (z_out.dim() - 1)))
 
-    def __init__(self, module: torch.nn.Module, kind: str) -> None:
+
+class Aligner(BaseAligner):
+    """Thin wrapper exposing a loaded aligner module through the BaseAligner API.
+
+    ``applied_at`` (from aligner_config.json) selects the placement: "receiver" (default) ->
+    ``apply_rx`` on the received latent; "transmitter" -> ``apply_tx`` on the encoder latent before
+    transmission, power-matched to the encoder output."""
+
+    def __init__(self, module: torch.nn.Module, kind: str, applied_at: str = "receiver") -> None:
         self.module = module
         self.kind = kind
         self.mode = "compressing" if kind == "zeroshot" else "residual"
-        self.stage = "both" if kind == "zeroshot" else "rx_latent"
+        if kind == "zeroshot":
+            self.stage = "both"
+        else:
+            self.stage = "tx_latent" if applied_at == "transmitter" else "rx_latent"
         self.transmitted_dim = getattr(module, "transmitted_dim", None)
 
     def apply_rx(self, latent_4d):
+        if self.stage == "tx_latent":
+            raise ValueError("this is a transmitter-side aligner; attach it to the encoder (socket_tx.py --aligner)")
         return self.module(latent_4d)
+
+    def apply_tx(self, latent_4d):
+        if self.stage != "tx_latent":
+            raise ValueError("this is a receiver-side aligner; attach it to the decoder (socket_rx.py --aligner)")
+        return tx_power_match(self.module(latent_4d), latent_4d)
 
     def compress(self, flat_1xm):
         return self.module.compression(flat_1xm)
@@ -59,6 +81,8 @@ def _build_by_kind(kind: str, m: int, tcn: int, n_samples: Optional[int]) -> tor
     if kind == "conv":
         return _m._ConvolutionalAlignment(in_channels=tcn, out_channels=tcn,
                                           kernel_size=5)
+    if kind == "rescnn":
+        return _m._ResCNNAlignment(tcn)
     if kind == "zeroshot":
         if not n_samples:
             raise ValueError("zero-shot aligner needs n_samples (channel usage)")
@@ -77,8 +101,10 @@ def _from_folder(folder: str, tcn: int, h: int, w: int, device: str):
         raise FileNotFoundError(f"no .pth weights in aligner folder {folder}")
     weight_path = weights[0]
 
+    applied_at = "receiver"
     if os.path.isfile(cfg_path):
         cfg = json.load(open(cfg_path))
+        applied_at = cfg.get("applied_at", "receiver")
         kind = cfg["kind"]
         module = _build_by_kind(kind, m, tcn, cfg.get("n_samples"))
         module.load_state_dict(torch.load(weight_path, map_location=device))
@@ -89,7 +115,7 @@ def _from_folder(folder: str, tcn: int, h: int, w: int, device: str):
         # fall back to the filename-inference factory
         module = _m.load_aligner(weight_path, tcn, h, w, device=device)
         kind = module.kind
-    return Aligner(module, kind)
+    return Aligner(module, kind, applied_at)
 
 
 def load_aligner(spec: str, tcn: int, h: int, w: int,
