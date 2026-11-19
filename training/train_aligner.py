@@ -41,6 +41,7 @@ the OFDM channel):
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import json
 import math
@@ -63,7 +64,7 @@ from jscc.data import make_loader  # noqa: E402
 from jscc.channels import reconcile_csi  # noqa: E402
 from jscc.adjscc.nn import powerConstraint  # noqa: E402
 from jscc.djscc_spatialcsi.nn import packetwise_to_element_map  # noqa: E402
-from jscc.aligners.aligner import _build_by_kind  # noqa: E402
+from jscc.aligners.aligner import _build_by_kind, load_aligner, tx_power_match  # noqa: E402
 from jscc.aligners import modules as _m  # noqa: E402
 # Reuse the proven recipe helpers so this trainer can't drift from train.py.
 from training.train import (  # noqa: E402
@@ -95,13 +96,19 @@ def decode_tgt(tgt_model, tgt_type, z, csi, drop_mask, n_pkts, packet_len, senti
 
 
 def aligner_forward(src_model, src_type, tgt_model, tgt_type, aligner, images, snr,
-                    channel, drop_prob, packet_len, sentinel_db):
-    """src encode + channel (+drops) under no_grad (frozen), then the trainable
-    aligner, then the frozen tgt decoder (grad flows through it to the aligner)."""
+                    channel, drop_prob, packet_len, sentinel_db, placement="rx", tx_frozen=None):
+    """src encode (frozen) [-> frozen TX aligner] -> trainable aligner placed at the TX (before
+    the channel, power-matched) or at the RX (after the channel) -> channel (+drops) -> frozen tgt
+    decoder. Gradients flow only into ``aligner`` (through the channel when placement="tx")."""
     B = images.shape[0]
     dev = images.device
     with torch.no_grad():
         z = encode_src(src_model, src_type, images, snr)
+        if tx_frozen is not None:
+            z = tx_frozen.apply_tx(z)
+    if placement == "tx":
+        z = tx_power_match(aligner(z), z)
+    with (torch.no_grad() if placement == "rx" else contextlib.nullcontext()):
         if channel is not None:
             z, csi = channel(z)
         else:
@@ -114,7 +121,8 @@ def aligner_forward(src_model, src_type, tgt_model, tgt_type, aligner, images, s
             drop_map = packetwise_to_element_map(
                 drop_mask.float(), M=tcn, H=h, W=w, pkt_len_complex=packet_len)
             z = z * (1.0 - drop_map)
-    z = aligner(z.detach())                     # only this carries gradients
+    if placement == "rx":
+        z = aligner(z.detach())                 # only this carries gradients
     return decode_tgt(tgt_model, tgt_type, z, csi, drop_mask, n_pkts,
                       packet_len, sentinel_db)
 
@@ -131,7 +139,8 @@ def validate(src_model, src_type, tgt_model, tgt_type, aligner, loader, device,
                           args.ofdm_eq, args.packet_len)
         out = aligner_forward(src_model, src_type, tgt_model, tgt_type, aligner,
                               images, snr_val, ch, 0.0, args.packet_len,
-                              args.sentinel_db).clamp(0.0, 1.0)
+                              args.sentinel_db, placement=args.placement,
+                              tx_frozen=args.tx_frozen).clamp(0.0, 1.0)
         mse = F.mse_loss(out, images, reduction="none").mean(dim=(1, 2, 3))
         psnrs.extend((10.0 * torch.log10(1.0 / mse.clamp_min(1e-10))).cpu().numpy())
     return float(np.mean(psnrs)) if psnrs else 0.0
@@ -290,9 +299,15 @@ def parse_args():
                    help="end2end = image loss through frozen tgt decoder (default); "
                         "latent = decoder-free latent matching (enables closed-form)")
     p.add_argument("--kind", default="conv",
-                   choices=["conv", "twoconv", "linear", "mlp", "zeroshot"],
+                   choices=["conv", "twoconv", "rescnn", "linear", "mlp", "zeroshot"],
                    help="aligner family (conv = deployed default; zeroshot/closed-form "
                         "linear require --objective latent)")
+    p.add_argument("--placement", default="rx", choices=["rx", "tx"],
+                   help="[end2end] rx = aligner on the received latent (default); tx = aligner on the "
+                        "encoder latent before the channel, power-matched to the encoder output")
+    p.add_argument("--tx-aligner", default=None,
+                   help="[end2end] frozen TX-side aligner applied before the channel (cascade: train an "
+                        "RX aligner on top of a deployed TX aligner)")
     p.add_argument("--train-data-dir", nargs="+", required=True)
     p.add_argument("--val-data-dir", nargs="+", default=None)
     # latent-objective only
@@ -331,6 +346,9 @@ def parse_args():
     p.add_argument("--lpips-weight", type=float, default=1.0)
 
     p.add_argument("--epochs", type=int, default=30)
+    p.add_argument("--train-images", type=int, default=0,
+                   help="use only the first N training images (fixed subset), repeated so an epoch has "
+                        "as many steps as the full set (data-budget experiments; 0 = all)")
     p.add_argument("--batch-size", type=int, default=4)
     p.add_argument("--accum-steps", type=int, default=1)
     p.add_argument("--lr", type=float, default=1e-4)
@@ -340,6 +358,9 @@ def parse_args():
     p.add_argument("--init-aligner", default=None,
                    help="[end2end] warm start: aligner folder or .pth to continue training from "
                         "(weights only; Adam and the cosine LR schedule start fresh)")
+    p.add_argument("--init-identity", action="store_true",
+                   help="[end2end, conv/rescnn] start from the identity map (cascade RX aligner on top of a "
+                        "TX aligner: starts exactly at the TX-only result)")
     p.add_argument("--push-to-hub", default=None,
                    help="optional HF repo id (uploads the aligner folder)")
     return p.parse_args()
@@ -351,7 +372,10 @@ def save_aligner(state_dict, args, tcn, src_type, tgt_type, n_samples=None):
     cfg = {"kind": args.kind, "objective": args.objective,
            "src_type": src_type, "tgt_type": tgt_type,
            "src_model": args.src_model, "tgt_model": args.tgt_model,
-           "channel": args.channel, "tcn": tcn, "applied_at": "receiver"}
+           "channel": args.channel, "tcn": tcn,
+           "applied_at": "transmitter" if getattr(args, "placement", "rx") == "tx" else "receiver"}
+    if getattr(args, "tx_aligner", None):
+        cfg["tx_aligner"] = args.tx_aligner
     if n_samples is not None:                       # zeroshot needs this to rebuild
         cfg["n_samples"] = int(n_samples)
     with open(os.path.join(args.out, "aligner_config.json"), "w") as f:
@@ -367,11 +391,34 @@ def run_end2end(args, src, src_type, tgt, tgt_type, device, tcn, h, w, H, W):
         path = args.init_aligner
         if os.path.isdir(path):
             path = os.path.join(path, "aligner.pth")
-        aligner.load_state_dict(torch.load(path, map_location=device))
+        state = torch.load(path, map_location=device)
+        if args.kind == "rescnn" and any(k.startswith("conv.") for k in state):
+            # warm start the linear path of a rescnn from a trained conv aligner
+            aligner.linear.load_state_dict({k[5:]: v for k, v in state.items()})
+        else:
+            aligner.load_state_dict(state)
         print(f"[*] warm start from {path}")
+    if args.init_identity:
+        conv = aligner.linear if args.kind == "rescnn" else getattr(aligner, "conv", None)
+        if conv is None:
+            raise SystemExit("--init-identity supports --kind conv / rescnn")
+        with torch.no_grad():
+            conv.weight.zero_(); conv.bias.zero_()
+            k = conv.kernel_size[0] // 2
+            for c in range(tcn):
+                conv.weight[c, c, k, k] = 1.0
+        print("[*] identity initialisation")
 
     train_loader = make_loader(args.train_data_dir, H, W, args.batch_size,
                                train=True, num_workers=args.num_workers)
+    if args.train_images:
+        from torch.utils.data import ConcatDataset, DataLoader, Subset
+        full = train_loader.dataset
+        sub = Subset(full, list(range(min(args.train_images, len(full)))))
+        reps = max(1, len(full) // len(sub))
+        train_loader = DataLoader(ConcatDataset([sub] * reps), batch_size=args.batch_size, shuffle=True,
+                                  num_workers=args.num_workers, drop_last=True, pin_memory=True)
+        print(f"[*] data budget: {len(sub)} training images, repeated x{reps}")
     val_loader = (make_loader(args.val_data_dir, H, W, args.batch_size,
                               train=False, num_workers=args.num_workers)
                   if args.val_data_dir else None)
@@ -390,7 +437,7 @@ def run_end2end(args, src, src_type, tgt, tgt_type, device, tcn, h, w, H, W):
           f"epochs={args.epochs} bs={args.batch_size}")
 
     best_psnr = 0.0
-    if args.init_aligner and val_loader:     # never overwrite the starting aligner with a worse one
+    if (args.init_aligner or args.init_identity) and val_loader:     # never overwrite the start with a worse one
         _snr0 = (0.5 * (args.snr_min + args.snr_max) if args.snr_min is not None else args.snr_db)
         best_psnr = validate(src, src_type, tgt, tgt_type, aligner, val_loader, device, args, _snr0)
         print(f"[*] starting aligner: val@{_snr0:.0f}dB psnr={best_psnr:.3f}")
@@ -408,7 +455,8 @@ def run_end2end(args, src, src_type, tgt, tgt_type, device, tcn, h, w, H, W):
                                    args.ofdm_subcarriers, args.ofdm_eq, args.packet_len)
             with torch.autocast(device_type=device.type, enabled=use_amp):
                 out = aligner_forward(src, src_type, tgt, tgt_type, aligner, images,
-                                      snr, channel, drop, args.packet_len, args.sentinel_db)
+                                      snr, channel, drop, args.packet_len, args.sentinel_db,
+                                      placement=args.placement, tx_frozen=args.tx_frozen)
                 loss = criterion(out, images) / args.accum_steps
             scaler.scale(loss).backward() if use_amp else loss.backward()
             if (i + 1) % args.accum_steps == 0:
@@ -497,6 +545,18 @@ def main() -> int:
     args.sentinel_db = getattr(tgt.config, "sentinel_drop_db", args.sentinel_db)
     print(f"[*] src={src_type}({args.src_model})  ->  tgt={tgt_type}({args.tgt_model})  device={device}")
 
+    args.tx_frozen = None
+    if args.tx_aligner:
+        if args.objective != "end2end":
+            raise SystemExit("--tx-aligner needs --objective end2end")
+        args.tx_frozen = load_aligner(args.tx_aligner, tcn, h, w, device=device)
+        if args.tx_frozen.stage != "tx_latent":
+            raise SystemExit(f"{args.tx_aligner} is not a transmitter-side aligner")
+        args.tx_frozen.module.eval()
+        print(f"[*] frozen TX aligner in front: {args.tx_aligner}")
+    if args.placement == "tx" and args.objective != "end2end":
+        raise SystemExit("--placement tx needs --objective end2end")
+    print(f"[*] placement={args.placement}")
     if args.objective == "latent":
         run_latent(args, src, src_type, tgt, tgt_type, device, tcn, h, w, H, W)
     else:

@@ -547,6 +547,15 @@ def argument_parser():
         "--device-address", dest="device_address", type=str, default="192.168.1.68",
         help="Set Device IP address  [default=%(default)r]")
     parser.add_argument(
+        "--device", dest="device", choices=["usrp", "lime"], default="usrp",
+        help="TX radio: usrp (UHD, --device-address) or lime (LimeSDR via SoapySDR) [default=%(default)r]")
+    parser.add_argument(
+        "--soapy-args", dest="soapy_args", type=str, default="driver=lime",
+        help="SoapySDR device string for --device lime, e.g. 'driver=lime,serial=...' [default=%(default)r]")
+    parser.add_argument(
+        "--lime-antenna", dest="lime_antenna", type=str, default="",
+        help="LimeSDR TX antenna (BAND1/BAND2; empty = driver default) [default=%(default)r]")
+    parser.add_argument(
         "--samp-rate", dest="samp_rate", type=eng_float, default=eng_notation.num_to_str(float(1e6)),
         help="Set Sampling Frequency [default=%(default)r]")
     return parser
@@ -555,6 +564,15 @@ def argument_parser():
 def main(top_block_cls=djscc_tx, options=None):
     if options is None:
         options = argument_parser().parse_args()
+
+    if options.device == "lime":
+        # swap the UHD sink for a SoapySDR (LimeSDR) sink; the rest of the flowgraph is unchanged
+        # NOTE: hand edit -- regenerating this file from djscc_tx.grc drops --device
+        global uhd
+        import os as _os
+        sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "receiver", "gnu_radio"))
+        from sdr_source import uhd_compat
+        uhd = uhd_compat(options.soapy_args, options.lime_antenna)
 
     qapp = Qt.QApplication(sys.argv)
 

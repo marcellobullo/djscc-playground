@@ -24,6 +24,11 @@ the static equalizer (what the deployed RX lacks).
 
 Run inside the `demo` env with the GNU Radio env vars, e.g.:
   python scripts/investigation/e2e_link.py --snr 0 8 16 28 --images 8
+
+Cross-model (semantic alignment) runs: --rx-model picks a different decoder than the
+--model encoder, --rx-csi its CSI, and --aligner attaches a receiver-side aligner, e.g.
+  --model ckpts/adjscc-matched-snr-final/best --rx-model marcellobullo/djscc-convnext-cr6-awgn
+  --aligner ckpts/adjscc-matched-snr-final/aligner-convnext-awgn
 """
 from __future__ import annotations
 
@@ -44,7 +49,7 @@ from PIL import Image
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, ROOT)
-from jscc import load_codec  # noqa: E402
+from jscc import load_aligner, load_codec  # noqa: E402
 
 FFT, CP, PKT, NDATA = 64, 16, 960, 48
 OCC = (list(range(-26, -21)) + list(range(-20, -7)) + list(range(-6, 0)) + list(range(1, 7))
@@ -280,8 +285,18 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default="marcellobullo/djscc-convnext-cr6-ofdm-spatialcsi")
     ap.add_argument("--csi", type=float, default=19.0, help="fixed decoder CSI (socket_rx --snr-db)")
+    ap.add_argument("--rx-model", default="", help="decoder model (default: --model)")
+    ap.add_argument("--rx-csi", type=float, default=None, help="decoder CSI (default: --csi)")
+    ap.add_argument("--aligner", default="", help="receiver-side aligner (folder / .pth / HF repo)")
+    ap.add_argument("--tx-aligner", default="", help="transmitter-side aligner (applied_at=transmitter)")
     ap.add_argument("--kodak", default="/Users/marcellobullo/Downloads/kodak_dataset")
+    ap.add_argument("--pattern", default="kodim*.png", help="image glob inside --kodak (e.g. '*.png' for the COCO subset)")
     ap.add_argument("--images", type=int, default=8)
+    ap.add_argument("--start", type=int, default=0, help="skip the first N images (process large sets in chunks)")
+    ap.add_argument("--dump-dir", default="", help="save each received latent as <dir>/snr_<S>dB/<stem>.npz "
+                    "(same fields as socket_rx.py --dump-dir, plus the image stem), for scripts/decode_ota_dumps.py")
+    ap.add_argument("--no-decode", action="store_true", help="only dump received latents (no decoding / scoring)")
+    ap.add_argument("--save-by-name", action="store_true", help="--save-dir files named <stem>.png instead of snr<S>_<NNN>.png")
     ap.add_argument("--snr", type=float, nargs="+", default=[0, 4, 8, 12, 16, 20, 24, 28])
     ap.add_argument("--no-interleave", action="store_true")
     ap.add_argument("--sw-tx", type=float, default=4.0)
@@ -295,6 +310,9 @@ def main():
     ap.add_argument("--dc", type=float, default=0.0)
     ap.add_argument("--clip", type=float, default=0.0)
     ap.add_argument("--taps", type=int, default=0)
+    ap.add_argument("--drop-rate", type=float, default=0.0,
+                    help="erase this fraction of received packets at random before reassembly (packet-loss "
+                         "study; the first packet of each image is kept so the slot anchoring stays correct)")
     ap.add_argument("--frame-gap", type=int, default=0, help="idle samples between OFDM frames (TX fix)")
     ap.add_argument("--gr-gap", type=int, default=0, help="frame gap via the GNU Radio Burst Shaper (as in the fixed .grc)")
     ap.add_argument("--gr-cpe", action="store_true", help="phase-ramp fix via the GNU Radio cfo_ramp_corrector block")
@@ -313,9 +331,18 @@ def main():
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
     enc = load_codec(a.model, "encoder", packet_len=PKT, snr_db=a.csi)
-    dec = load_codec(a.model, "decoder", packet_len=PKT, snr_db=a.csi)
+    rx_model = a.rx_model or a.model
+    dec = load_codec(rx_model, "decoder", packet_len=PKT, snr_db=a.csi if a.rx_csi is None else a.rx_csi)
+    if a.aligner:
+        al = load_aligner(a.aligner, dec.tcn, dec.h, dec.w, device=dec.device)
+        dec.set_aligner(al)
+        print(f"[*] aligner attached: kind={al.kind} mode={al.mode}", flush=True)
+    if a.tx_aligner:
+        tal = load_aligner(a.tx_aligner, enc.tcn, enc.h, enc.w, device=enc.device)
+        enc.set_aligner(tal)
+        print(f"[*] TX aligner attached: kind={tal.kind} stage={tal.stage}", flush=True)
     expected = enc.expected_complex_items
-    paths = sorted(glob.glob(f"{a.kodak}/kodim*.png"))[: a.images]
+    paths = sorted(glob.glob(f"{a.kodak}/{a.pattern}"))[a.start: a.start + a.images]
     W, H = 768, 512
     def build():
         origs, lat, tx_stream = [], [], []
@@ -362,6 +389,9 @@ def main():
         rng = np.random.default_rng(a.seed + int(snr * 10))
         t0 = time.time()
         frames = gr_rx(channel(x, act, snr, a, rng), a.sw_rx, a.sync_thr, a.gr_cpe)
+        if a.drop_rate > 0:
+            drng = np.random.default_rng(a.seed + 7)
+            frames = [f for f in frames if f[0] % n_slots == 0 or drng.random() >= a.drop_rate]
         imgs = socket_rx(frames, n_slots, expected, interleave, a.cpe, None, 0)
         rows = []
         for k, im in enumerate(imgs[: len(paths)]):
@@ -374,11 +404,23 @@ def main():
             g = np.vdot(s[ok], s_rx[ok]) / np.vdot(s[ok], s[ok])
             e = s_rx[ok] - g * s[ok]
             snr_eff = 10 * np.log10(abs(g) ** 2 * np.mean(abs(s[ok]) ** 2) / np.mean(abs(e) ** 2))
+            stem = os.path.splitext(os.path.basename(paths[i]))[0]
+            if a.dump_dir:
+                d = os.path.join(a.dump_dir, f"snr_{int(snr)}dB")
+                os.makedirs(d, exist_ok=True)
+                np.savez_compressed(os.path.join(d, f"{stem}.npz"), symbols=s_rx.astype(np.complex64), seen=np.asarray(im["seen"], bool),
+                                    interleave=interleave, packet_len=PKT, csi_db=float(dec.snr_db), stem=stem)
+            if a.no_decode:
+                rows.append(dict(img=os.path.basename(paths[i]), corr=float(cs[i]), psnr=float("nan"), ssim=float("nan"),
+                                 gain=float(abs(g)), phase_deg=float(np.degrees(np.angle(g))), snr_eff=float(snr_eff),
+                                 missing=int((~im["seen"]).sum()), shifted=int(im["shift"] != 0)))
+                continue
             rgb = np.frombuffer(dec.decode(s_rx), np.uint8).reshape(H, W, 3)
             if a.save_dir:
                 d = os.path.join(a.save_dir, f"snr_{int(snr)}dB")
                 os.makedirs(d, exist_ok=True)
-                cv2.imwrite(os.path.join(d, f"snr{int(snr)}_{i + 1:03d}.png"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+                fn = f"{stem}.png" if a.save_by_name else f"snr{int(snr)}_{i + 1:03d}.png"
+                cv2.imwrite(os.path.join(d, fn), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
             rows.append(dict(img=os.path.basename(paths[i]), corr=float(cs[i]), psnr=float(psnr(rgb, origs[i])),
                              ssim=ssim(rgb, origs[i]),
                              gain=float(abs(g)), phase_deg=float(np.degrees(np.angle(g))), snr_eff=float(snr_eff),

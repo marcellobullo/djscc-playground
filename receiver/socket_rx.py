@@ -134,13 +134,12 @@ def receive_loop(codec, socket, snr_socket, args):
             stream = stream[perm_fwd]
         symbols = stream[:expected].copy()
 
-        if args.dump_dir:
-            # raw de-interleaved latent as handed to the decoder (pre clip/renorm),
-            # for offline link diagnostics (scripts/analyze_link_symbols.py)
-            os.makedirs(args.dump_dir, exist_ok=True)
-            np.savez_compressed(os.path.join(args.dump_dir, f"frame_{total + 1:04d}.npz"),
-                                symbols=symbols, seen=np.array(seen, dtype=bool),
-                                interleave=bool(args.interleave), packet_len=PKT)
+        # raw de-interleaved latent as handed to the decoder (pre clip/renorm), saved below
+        # together with the live CSI, for offline link diagnostics
+        # (scripts/analyze_link_symbols.py) and offline decoding with any decoder/aligner
+        # (scripts/decode_ota_dumps.py)
+        dump = dict(symbols=symbols.copy(), seen=np.array(seen, dtype=bool),
+                    interleave=bool(args.interleave), packet_len=PKT) if args.dump_dir else None
 
         if args.clip_mag > 0:
             mags = np.abs(symbols)
@@ -191,6 +190,9 @@ def receive_loop(codec, socket, snr_socket, args):
                     if not np.isfinite(per_pkt[i]) and seen[i]:
                         per_pkt[i] = fill
                 codec.set_csi_vector(per_pkt)
+                if dump is not None:
+                    dump["csi_vec_db"] = np.asarray(per_pkt, dtype=np.float32).copy()
+                    dump["csi_db"] = float(np.nanmean(per_pkt))
                 nfin = int(np.isfinite(per_pkt).sum())
                 print(f"  [snr:{tag}] per-packet over {nfin}/{PKT_PER_IMG} pkts, "
                       f"mean={np.nanmean(per_pkt):.2f} dB")
@@ -206,10 +208,18 @@ def receive_loop(codec, socket, snr_socket, args):
                     snr = None
                 if snr is not None and np.isfinite(snr):
                     codec.set_csi(snr + args.snr_offset_db)
+                    if dump is not None:
+                        dump["csi_db"] = float(snr + args.snr_offset_db)
+                        dump["csi_vec_db"] = np.asarray(per_pkt, dtype=np.float32).copy()
                     leg = f", legacy nulls+taps={10.0 * np.log10(1.0 / np.mean(noise)):.2f} dB" if noise else ""
                     print(f"  [snr:{tag}] live={snr + args.snr_offset_db:.2f} dB over {n_used}/{len(pn_log)} pkts{leg}")
             for pn, _ in pn_log:
                 h_by_pn.pop(pn, None); raw_by_pn.pop(pn, None); pil_by_pn.pop(pn, None)
+
+        if dump is not None:
+            dump.setdefault("csi_db", float(args.snr_db))   # fixed CSI when no live SNR
+            os.makedirs(args.dump_dir, exist_ok=True)
+            np.savez_compressed(os.path.join(args.dump_dir, f"frame_{total + 1:04d}.npz"), **dump)
 
         t0 = time.time()
         try:

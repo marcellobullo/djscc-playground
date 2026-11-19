@@ -157,6 +157,44 @@ Here `matched=` points at the **target** folder, so the printed ARR is measured 
 ConvNeXt ceiling, which is the most the aligned run can reach. Pass
 `matched=received_images/ota_align/matched` instead for the ARR against the source model.
 
+## 6. Distance sweep with latent dumps (paper protocol)
+
+Record the received latents once per position and decode them offline with every aligner,
+so all aligners see the same received symbols (same noise, same lost packets). Per position
+only **two** transmissions are needed: the ADJSCC encoder (for matched, misaligned and every
+aligned run) and the ConvNeXt encoder (for target).
+
+Fix the TX/RX gains and the antennas for the whole session; move only the RX. At each
+position (e.g. 1, 2, 4, 6, 8, 10 m, plus one non-line-of-sight spot), with
+`P=received_images/ota/pos_<d>m`:
+
+ADJSCC transmission (use the same `--snr-db` at every position, e.g. the live SNR read at the
+closest position; note the `[snr:pilots] live=` values in the RX log for every position):
+```bash
+python receiver/socket_rx.py --model ckpts/adjscc-matched-snr-final/best --use-live-snr --interleave --count 24 --no-timestamp --output-dir $P/matched --dump-dir $P/dump_adjscc
+```
+```bash
+python transmitter/socket_tx.py --model ckpts/adjscc-matched-snr-final/best --source folder --path /path/to/kodak_dataset --interleave --snr-db 28
+```
+
+ConvNeXt transmission:
+```bash
+python receiver/socket_rx.py --model marcellobullo/djscc-convnext-cr6-awgn --use-live-snr --interleave --count 24 --no-timestamp --output-dir $P/target --dump-dir $P/dump_convnext
+```
+```bash
+python transmitter/socket_tx.py --model marcellobullo/djscc-convnext-cr6-awgn --source folder --path /path/to/kodak_dataset --interleave
+```
+
+Each dump frame stores the received latent and the live CSI the RX measured. Decode offline
+(any machine), e.g. for the ADJSCC dump:
+```bash
+python scripts/decode_ota_dumps.py --dump $P/dump_adjscc --kodak /path/to/kodak_dataset --model marcellobullo/djscc-convnext-cr6-awgn --run misaligned=none --run conv=ckpts/adjscc-matched-snr-final/aligner-convnext-awgn --run rescnn=ckpts/aligners/rescnn --run jw=ckpts/aligners/jw_t1_best --run wiener=ckpts/aligners/wiener5_100 --out results/ota/pos_<d>m
+```
+and the matched / target references from the same dumps with their own decoders
+(`--model ckpts/adjscc-matched-snr-final/best --run matched=none` on `dump_adjscc`,
+`--model marcellobullo/djscc-convnext-cr6-awgn --run target=none` on `dump_convnext`).
+Repeat each position two or three times (or send 48 images) if time allows, to report a spread.
+
 ## Reference numbers (simulation, not over the air)
 
 AWGN at 14 dB, DIV2K validation images: source matched 32.8 dB, target 28.6 dB, misaligned
