@@ -55,14 +55,21 @@ class Burst:
         self.err_da.append(float(np.mean(np.abs(y - g * x) ** 2)))
         self.gain.append(abs(g)); self.phase.append(np.degrees(np.angle(g)))
 
-    def summary(self, px, pil_by_pn, tx_power):
-        n = len(self.pns)
-        span = max(self.pns) - min(self.pns) + 1
+    def summary(self, px, pil_by_pn, tx_power, pkts):
+        # Loss from the packet numbers, ignoring stray numbers: a corrupted header that still passes the
+        # header CRC carries a random packet number, which would inflate max-min. Keep the packets whose
+        # number is within one burst of the median, and count the missing ones against the burst length.
+        pns = np.array(self.pns)
+        med = np.median(pns)
+        good = np.abs(pns - med) < pkts
+        n = int(good.sum())
+        span = int(pns[good].max() - pns[good].min() + 1)
+        lost = max(0, min(span, pkts * max(1, round(span / pkts))) - n) if n else 0
         dec = db(px / np.mean(self.err_dec))
         da = db(np.mean(np.square(self.gain)) * px / np.mean(self.err_da))
         st = [pil_by_pn.pop(q) for q in self.pns if q in pil_by_pn]
         pil = pooled_snr_eff_db(st, tx_power=tx_power) if st else float("nan")
-        return dict(n=n, lost=span - n, dec=dec, da=da, pil=pil,
+        return dict(n=n, lost=lost, stray=len(pns) - n, dec=dec, da=da, pil=pil,
                     gain=float(np.mean(self.gain)), phase_std=float(np.std(self.phase)))
 
 
@@ -73,6 +80,9 @@ def main() -> int:
     p.add_argument("--snr-port", default="5560")
     p.add_argument("--no-pilots", action="store_true", help="do not bind the pilot-statistics port")
     p.add_argument("--packet-len", type=int, default=960)
+    p.add_argument("--pkts", type=int, default=205, help="packets per burst, must match snr_probe_tx.py")
+    p.add_argument("--min-pkts", type=int, default=20,
+                   help="bursts with fewer packets are shown but left out of the summary (noise triggers)")
     p.add_argument("--seed", type=int, default=1234, help="must match snr_probe_tx.py")
     p.add_argument("--tx-power", type=float, default=2.0, help="must match snr_probe_tx.py")
     p.add_argument("--burst-gap", type=float, default=0.25, help="idle time (s) that closes a burst")
@@ -104,7 +114,7 @@ def main() -> int:
     def close():
         nonlocal cur
         if cur is not None and cur.pns:
-            r = cur.summary(px, pil_by_pn, a.tx_power)
+            r = cur.summary(px, pil_by_pn, a.tx_power, a.pkts)
             rows.append(r)
             print(f"{time.time() - t0:8.1f} {r['n']:5d} {r['lost']:5d} {r['dec']:7.2f} {r['da']:7.2f} "
                   f"{r['pil']:7.2f} {r['gain']:5.2f} {r['phase_std']:6.1f}", flush=True)
@@ -154,6 +164,11 @@ def main() -> int:
 
     if not rows:
         print("\n[!] no bursts received (is the probe TX running? flowgraph synced?)")
+        return 1
+    shown = len(rows)
+    rows = [r for r in rows if r["n"] >= a.min_pkts]
+    if not rows:
+        print(f"\n[!] {shown} bursts, none with >= {a.min_pkts} packets (no stable link here)")
         return 1
     dec = np.array([r["dec"] for r in rows]); da = np.array([r["da"] for r in rows])
     pil = np.array([r["pil"] for r in rows]); n = sum(r["n"] for r in rows); lost = sum(r["lost"] for r in rows)
