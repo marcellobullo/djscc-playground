@@ -26,3 +26,5 @@ results-backup/
 # training data and local training runs (brought over / copied separately)
 data/
 ckpts/adjscc-matched-snr/
+DJSCC-playground RX_screenshot_*.png
+djscc-vs-sscc.png
